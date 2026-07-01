@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -77,7 +78,7 @@ val engineActions = listOf(
         channel = 1,
         defaultSeconds = "1.0",
         summary = "CH1 / 始動系",
-        description = "指定秒数だけONにして、自動でOFF",
+        description = "指定秒数だけON→OFF",
         dangerous = true
     ),
     EngineAction(
@@ -85,7 +86,7 @@ val engineActions = listOf(
         channel = 2,
         defaultSeconds = "1.0",
         summary = "CH2 / 停止系",
-        description = "指定秒数だけONにして、自動でOFF",
+        description = "指定秒数だけON→OFF",
         dangerous = true
     ),
     EngineAction(
@@ -93,25 +94,26 @@ val engineActions = listOf(
         channel = 3,
         defaultSeconds = "1.0",
         summary = "CH3 / DCモーター",
-        description = "指定秒数だけONにして、自動でOFF"
+        description = "指定秒数だけON→OFF"
     ),
     EngineAction(
         title = "チョークA",
         channel = 5,
         defaultSeconds = "0.5",
-        summary = "CH5 / チョーク調整",
-        description = "少しずつ動かして向きを確認"
+        summary = "CH5",
+        description = "少しずつ調整"
     ),
     EngineAction(
         title = "チョークB",
         channel = 6,
         defaultSeconds = "0.5",
-        summary = "CH6 / チョーク調整",
-        description = "少しずつ動かして向きを確認"
+        summary = "CH6",
+        description = "少しずつ調整"
     )
 )
 
 enum class EnginePane(val title: String) {
+    CONNECTION("接続"),
     OPERATION("操作"),
     SETTINGS("設定"),
     LOG("ログ")
@@ -145,6 +147,9 @@ class MainActivity : ComponentActivity() {
     private var runningActionTitle by mutableStateOf<String?>(null)
     private var runningRemainingText by mutableStateOf("-")
 
+    @Volatile
+    private var actionCancelRequested = false
+
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             permissionGranted = hasBluetoothPermissions()
@@ -176,6 +181,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        actionCancelRequested = true
         relayManager.disconnect()
         super.onDestroy()
     }
@@ -282,6 +288,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun disconnectDevice() {
+        actionCancelRequested = true
         relayManager.disconnect()
         isConnected = false
         engineActionRunning = false
@@ -298,7 +305,7 @@ class MainActivity : ComponentActivity() {
         if (!isConnected) {
             statusText = "未接続"
             addLog("${action.title}失敗: 未接続")
-            currentPane = EnginePane.OPERATION
+            currentPane = EnginePane.CONNECTION
             return
         }
 
@@ -317,16 +324,15 @@ class MainActivity : ComponentActivity() {
         val clampedSeconds = seconds.coerceIn(0.1, 5.0)
         val totalMillis = (clampedSeconds * 1000.0).toLong()
 
-        thread {
-            runOnUiThread {
-                engineActionRunning = true
-                runningActionTitle = action.title
-                runningRemainingText = String.format(Locale.US, "%.1f 秒", clampedSeconds)
-                statusText = "${action.title} 実行中..."
-                relayStates[action.channel - 1] = true
-                addLog("${action.title}: CH${action.channel} ON / ${clampedSeconds}秒")
-            }
+        actionCancelRequested = false
+        engineActionRunning = true
+        runningActionTitle = action.title
+        runningRemainingText = String.format(Locale.US, "%.1f 秒", clampedSeconds)
+        statusText = "${action.title} 実行中..."
+        relayStates[action.channel - 1] = true
+        addLog("${action.title}: CH${action.channel} ON / ${clampedSeconds}秒")
 
+        thread {
             val onResult = relayManager.send(RelayCommands.channelOn(action.channel))
 
             if (onResult.isFailure) {
@@ -345,7 +351,7 @@ class MainActivity : ComponentActivity() {
             val startTime = System.currentTimeMillis()
 
             while (true) {
-                if (!engineActionRunning) {
+                if (actionCancelRequested) {
                     runOnUiThread {
                         runningRemainingText = "-"
                     }
@@ -360,11 +366,13 @@ class MainActivity : ComponentActivity() {
                 }
 
                 runOnUiThread {
-                    runningRemainingText = String.format(
-                        Locale.US,
-                        "%.1f 秒",
-                        remaining / 1000.0
-                    )
+                    if (!actionCancelRequested) {
+                        runningRemainingText = String.format(
+                            Locale.US,
+                            "%.1f 秒",
+                            remaining / 1000.0
+                        )
+                    }
                 }
 
                 try {
@@ -377,6 +385,10 @@ class MainActivity : ComponentActivity() {
                     }
                     return@thread
                 }
+            }
+
+            if (actionCancelRequested) {
+                return@thread
             }
 
             val offResult = relayManager.send(RelayCommands.channelOff(action.channel))
@@ -404,6 +416,8 @@ class MainActivity : ComponentActivity() {
             addLog("全OFF失敗: 未接続")
             return
         }
+
+        actionCancelRequested = true
 
         thread {
             val result = relayManager.send(RelayCommands.allOff)
@@ -451,7 +465,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(16.dp)
+                    .padding(12.dp)
             ) {
                 CompactStatusHeader(
                     isConnected = isConnected,
@@ -460,9 +474,15 @@ class MainActivity : ComponentActivity() {
                     selectedDeviceName = selectedDevice?.name ?: "未選択"
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 when (currentPane) {
+                    EnginePane.CONNECTION -> ConnectionPane(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+
                     EnginePane.OPERATION -> OperationPane(
                         modifier = Modifier
                             .weight(1f)
@@ -487,176 +507,79 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun OperationPane(modifier: Modifier = Modifier) {
-        val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
-        val mainActions = engineActions.take(3)
-        val chokeActions = engineActions.drop(3)
-
+    private fun ConnectionPane(modifier: Modifier = Modifier) {
         LazyColumn(
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item(key = "connection") {
-                ConnectionDashboardCard(
-                    selectedDeviceName = selectedDevice?.name ?: "未選択"
-                )
-            }
-
-            item(key = "emergency") {
-                EmergencyCard()
-            }
-
-            item(key = "running") {
-                RunningCard()
-            }
-
-            item(key = "main_title") {
-                SectionTitle("メイン操作")
-            }
-
-            item(key = "main_actions") {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    mainActions.forEachIndexed { index, action ->
-                        LargeEngineActionCard(
-                            action = action,
-                            secondsText = actionSeconds[index],
-                            enabled = isConnected && !engineActionRunning,
-                            running = runningActionTitle == action.title,
-                            onRun = {
-                                runTimedAction(
-                                    action = action,
-                                    secondsText = actionSeconds[index]
-                                )
-                            }
-                        )
-                    }
-                }
-            }
-
-            item(key = "choke_title") {
-                SectionTitle("チョーク調整")
-            }
-
-            item(key = "choke_actions") {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    chokeActions.forEachIndexed { localIndex, action ->
-                        val globalIndex = localIndex + 3
-                        Box(modifier = Modifier.weight(1f)) {
-                            SmallEngineActionCard(
-                                action = action,
-                                secondsText = actionSeconds[globalIndex],
-                                enabled = isConnected && !engineActionRunning,
-                                running = runningActionTitle == action.title,
-                                onRun = {
-                                    runTimedAction(
-                                        action = action,
-                                        secondsText = actionSeconds[globalIndex]
-                                    )
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-
-            item(key = "channel_state") {
-                ChannelStateCard()
-            }
-        }
-    }
-
-    @Composable
-    private fun ConnectionDashboardCard(
-        selectedDeviceName: String
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+            item(key = "connection_buttons") {
+                Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Text(
                             text = "Bluetooth接続",
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = "選択中: $selectedDeviceName",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
 
-                    ConnectionDot(isConnected = isConnected)
-                }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { requestBluetoothPermission() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("権限")
+                            }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { requestBluetoothPermission() },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("権限")
-                    }
+                            OutlinedButton(
+                                onClick = { refreshBondedDevices() },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("再読込")
+                            }
+                        }
 
-                    OutlinedButton(
-                        onClick = { refreshBondedDevices() },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("再読込")
-                    }
-                }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Button(
+                                onClick = { connectSelectedDevice() },
+                                modifier = Modifier.weight(1f),
+                                enabled = permissionGranted && selectedAddress != null && !isConnected
+                            ) {
+                                Text("接続")
+                            }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { connectSelectedDevice() },
-                        modifier = Modifier.weight(1f),
-                        enabled = permissionGranted && selectedAddress != null && !isConnected
-                    ) {
-                        Text("接続")
-                    }
-
-                    OutlinedButton(
-                        onClick = { disconnectDevice() },
-                        modifier = Modifier.weight(1f),
-                        enabled = isConnected
-                    ) {
-                        Text("切断")
+                            OutlinedButton(
+                                onClick = { disconnectDevice() },
+                                modifier = Modifier.weight(1f),
+                                enabled = isConnected
+                            ) {
+                                Text("切断")
+                            }
+                        }
                     }
                 }
-
-                DevicePickerSection()
             }
-        }
-    }
 
-    @Composable
-    private fun DevicePickerSection() {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            SectionTitle("ペアリング済み機器")
+            item(key = "device_title") {
+                SectionTitle("ペアリング済み機器")
+            }
 
             if (deviceList.isEmpty()) {
-                InfoCard("端末設定で先にペアリングしてから再読込してね")
+                item(key = "device_empty") {
+                    InfoCard("端末設定で先にペアリングしてから再読込してね")
+                }
             } else {
-                deviceList.forEach { device ->
+                items(
+                    items = deviceList,
+                    key = { device -> "device-${device.address}" }
+                ) { device ->
                     DeviceCard(
                         device = device,
                         selected = selectedAddress == device.address,
@@ -668,16 +591,126 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun EmergencyCard() {
-        Card(
-            modifier = Modifier.fillMaxWidth()
+    private fun OperationPane(modifier: Modifier = Modifier) {
+        val mainActions = engineActions.take(3)
+        val chokeActions = engineActions.drop(3)
+
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OperationInfoCard(
+                    modifier = Modifier.weight(1f)
+                )
+                EmergencyMiniCard(
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SectionTitle("メイン操作")
+                    mainActions.forEachIndexed { index, action ->
+                        OperationActionCard(
+                            action = action,
+                            secondsText = actionSeconds[index],
+                            enabled = isConnected && !engineActionRunning,
+                            running = runningActionTitle == action.title,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            onRun = {
+                                runTimedAction(
+                                    action = action,
+                                    secondsText = actionSeconds[index]
+                                )
+                            }
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    RunningMiniCard(
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    SectionTitle("チョーク")
+                    chokeActions.forEachIndexed { localIndex, action ->
+                        val globalIndex = localIndex + 3
+                        OperationActionCard(
+                            action = action,
+                            secondsText = actionSeconds[globalIndex],
+                            enabled = isConnected && !engineActionRunning,
+                            running = runningActionTitle == action.title,
+                            compact = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            onRun = {
+                                runTimedAction(
+                                    action = action,
+                                    secondsText = actionSeconds[globalIndex]
+                                )
+                            }
+                        )
+                    }
+
+                    ChannelStateMiniCard(
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun OperationInfoCard(modifier: Modifier = Modifier) {
+        Card(modifier = modifier) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    text = "緊急操作",
+                    text = "操作画面",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (isConnected) "各ボタンは指定秒数だけON→OFF" else "先に接続PaneでBluetooth接続してね",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun EmergencyMiniCard(modifier: Modifier = Modifier) {
+        Card(modifier = modifier) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "緊急",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -698,13 +731,11 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun RunningCard() {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+    private fun RunningMiniCard(modifier: Modifier = Modifier) {
+        Card(modifier = modifier) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
                     text = "実行状態",
@@ -713,57 +744,66 @@ class MainActivity : ComponentActivity() {
                 )
 
                 if (engineActionRunning) {
-                    Text("実行中: ${runningActionTitle ?: "不明"}")
-                    Text("残り: $runningRemainingText")
+                    Text(
+                        text = runningActionTitle ?: "実行中",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "残り $runningRemainingText",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 } else {
-                    Text("待機中")
-                    Text("次の操作を実行できるよ")
+                    Text(
+                        text = "待機中",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "操作できます",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
         }
     }
 
     @Composable
-    private fun LargeEngineActionCard(
+    private fun OperationActionCard(
         action: EngineAction,
         secondsText: String,
         enabled: Boolean,
         running: Boolean,
+        modifier: Modifier = Modifier,
+        compact: Boolean = false,
         onRun: () -> Unit
     ) {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Card(modifier = modifier) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(if (compact) 10.dp else 12.dp),
+                verticalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
+                    Text(
+                        text = action.title,
+                        style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "${action.summary} / ${secondsText.ifBlank { "?" }}秒",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (!compact) {
                         Text(
-                            text = action.title,
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = action.summary,
-                            style = MaterialTheme.typography.bodyMedium
+                            text = action.description,
+                            style = MaterialTheme.typography.bodySmall
                         )
                     }
-
-                    StatusChip("${secondsText.ifBlank { "?" }} 秒")
                 }
-
-                Text(
-                    text = action.description,
-                    style = MaterialTheme.typography.bodyMedium
-                )
 
                 Button(
                     onClick = onRun,
@@ -778,49 +818,6 @@ class MainActivity : ComponentActivity() {
                         ButtonDefaults.buttonColors()
                     }
                 ) {
-                    Text(
-                        if (running) {
-                            "実行中..."
-                        } else {
-                            "${action.title} 実行"
-                        }
-                    )
-                }
-            }
-        }
-    }
-
-    @Composable
-    private fun SmallEngineActionCard(
-        action: EngineAction,
-        secondsText: String,
-        enabled: Boolean,
-        running: Boolean,
-        onRun: () -> Unit
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = action.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "CH${action.channel} / ${secondsText.ifBlank { "?" }} 秒",
-                    style = MaterialTheme.typography.bodySmall
-                )
-
-                Button(
-                    onClick = onRun,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = enabled
-                ) {
                     Text(if (running) "実行中" else "実行")
                 }
             }
@@ -828,18 +825,16 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ChannelStateCard() {
+    private fun ChannelStateMiniCard(modifier: Modifier = Modifier) {
         val visibleChannels = listOf(1, 2, 3, 5, 6)
 
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
+        Card(modifier = modifier) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "使用チャンネル状態",
+                    text = "CH状態",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
@@ -847,7 +842,7 @@ class MainActivity : ComponentActivity() {
                 visibleChannels.chunked(3).forEach { rowChannels ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         rowChannels.forEach { ch ->
                             Box(modifier = Modifier.weight(1f)) {
@@ -857,7 +852,6 @@ class MainActivity : ComponentActivity() {
                                 )
                             }
                         }
-
                         repeat(3 - rowChannels.size) {
                             Spacer(modifier = Modifier.weight(1f))
                         }
@@ -1018,38 +1012,40 @@ private fun CompactStatusHeader(
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    ConnectionDot(isConnected = isConnected)
-                    Spacer(modifier = Modifier.width(8.dp))
+                ConnectionDot(isConnected = isConnected)
+                Spacer(modifier = Modifier.width(8.dp))
+                Column {
                     Text(
                         text = if (isConnected) "接続中" else "未接続",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    Text(
+                        text = selectedDeviceName,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
-
-                StatusChip("権限: ${if (permissionGranted) "OK" else "未許可"}")
             }
 
-            Text(
-                text = "機器: $selectedDeviceName",
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Text(
-                text = "詳細: $statusText",
-                style = MaterialTheme.typography.bodySmall
-            )
+            Column(
+                horizontalAlignment = Alignment.End
+            ) {
+                StatusChip("権限: ${if (permissionGranted) "OK" else "未許可"}")
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
     }
 }
@@ -1078,7 +1074,7 @@ private fun StatusChip(text: String) {
     ) {
         Text(
             text = text,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             style = MaterialTheme.typography.bodySmall
         )
     }
@@ -1095,13 +1091,13 @@ private fun ChannelStateChip(
         tonalElevation = if (isOn) 4.dp else 1.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(10.dp)
+                    .size(8.dp)
                     .clip(CircleShape)
                     .background(
                         if (isOn) {
@@ -1112,10 +1108,10 @@ private fun ChannelStateChip(
                     )
             )
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
 
             Text(
-                text = "CH$ch ${if (isOn) "ON" else "OFF"}",
+                text = "CH$ch",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold
             )
