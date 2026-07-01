@@ -606,7 +606,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OperationInfoCard(
+                RunningMiniCard(
                     modifier = Modifier.weight(1f)
                 )
                 EmergencyStopCard(
@@ -671,26 +671,6 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-            }
-        }
-    }
-
-    @Composable
-    private fun OperationInfoCard(modifier: Modifier = Modifier) {
-        Card(modifier = modifier) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    text = "操作画面",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = if (isConnected) "各ボタンは指定秒数だけON→OFF" else "先に接続PaneでBluetooth接続してね",
-                    style = MaterialTheme.typography.bodySmall
-                )
             }
         }
     }
