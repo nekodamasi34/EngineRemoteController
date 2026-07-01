@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,8 +54,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import kotlin.concurrent.thread
 import java.util.Locale
+import kotlin.concurrent.thread
 
 data class DeviceUi(
     val name: String,
@@ -65,6 +66,7 @@ data class EngineAction(
     val title: String,
     val channel: Int,
     val defaultSeconds: String,
+    val summary: String,
     val description: String,
     val dangerous: Boolean = false
 )
@@ -74,33 +76,38 @@ val engineActions = listOf(
         title = "イグニッション",
         channel = 1,
         defaultSeconds = "1.0",
-        description = "CH1を指定秒数だけON",
+        summary = "CH1 / 始動系",
+        description = "指定秒数だけONにして、自動でOFF",
         dangerous = true
     ),
     EngineAction(
         title = "エンジン切",
         channel = 2,
         defaultSeconds = "1.0",
-        description = "CH2を指定秒数だけON",
+        summary = "CH2 / 停止系",
+        description = "指定秒数だけONにして、自動でOFF",
         dangerous = true
     ),
     EngineAction(
         title = "アラーム",
         channel = 3,
         defaultSeconds = "1.0",
-        description = "CH3のDCモーターを指定秒数だけON"
+        summary = "CH3 / DCモーター",
+        description = "指定秒数だけONにして、自動でOFF"
     ),
     EngineAction(
         title = "チョークA",
         channel = 5,
         defaultSeconds = "0.5",
-        description = "CH5を指定秒数だけON"
+        summary = "CH5 / チョーク調整",
+        description = "少しずつ動かして向きを確認"
     ),
     EngineAction(
         title = "チョークB",
         channel = 6,
         defaultSeconds = "0.5",
-        description = "CH6を指定秒数だけON"
+        summary = "CH6 / チョーク調整",
+        description = "少しずつ動かして向きを確認"
     )
 )
 
@@ -126,11 +133,6 @@ class MainActivity : ComponentActivity() {
     private var permissionGranted by mutableStateOf(false)
     private var currentPane by mutableStateOf(EnginePane.OPERATION)
 
-    private var timerSelectedChannel by mutableStateOf(1)
-    private var timerSecondsInput by mutableStateOf("3")
-    private var timerRunning by mutableStateOf(false)
-    private var timerRemainingText by mutableStateOf("-")
-
     private val actionSeconds = mutableStateListOf(
         "1.0",  // イグニッション
         "1.0",  // エンジン切
@@ -141,6 +143,7 @@ class MainActivity : ComponentActivity() {
 
     private var engineActionRunning by mutableStateOf(false)
     private var runningActionTitle by mutableStateOf<String?>(null)
+    private var runningRemainingText by mutableStateOf("-")
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -281,226 +284,11 @@ class MainActivity : ComponentActivity() {
     private fun disconnectDevice() {
         relayManager.disconnect()
         isConnected = false
-        timerRunning = false
-        timerRemainingText = "-"
+        engineActionRunning = false
+        runningActionTitle = null
+        runningRemainingText = "-"
         statusText = "切断済み"
         addLog("切断した")
-    }
-
-    private fun sendCommand(
-        bytes: ByteArray,
-        successMessage: String,
-        onSuccess: () -> Unit
-    ) {
-        thread {
-            val result = relayManager.send(bytes)
-
-            runOnUiThread {
-                if (result.isSuccess) {
-                    onSuccess()
-                    addLog("送信成功: $successMessage")
-                } else {
-                    addLog("送信失敗: ${result.exceptionOrNull()?.message ?: "不明"}")
-                }
-            }
-        }
-    }
-
-    private fun turnOnChannel(ch: Int) {
-        sendCommand(
-            bytes = RelayCommands.channelOn(ch),
-            successMessage = "CH$ch ON"
-        ) {
-            relayStates[ch - 1] = true
-        }
-    }
-
-    private fun turnOffChannel(ch: Int) {
-        sendCommand(
-            bytes = RelayCommands.channelOff(ch),
-            successMessage = "CH$ch OFF"
-        ) {
-            relayStates[ch - 1] = false
-        }
-    }
-
-    private fun turnAllOn() {
-        sendCommand(
-            bytes = RelayCommands.allOn,
-            successMessage = "全ON"
-        ) {
-            for (i in relayStates.indices) {
-                relayStates[i] = true
-            }
-        }
-    }
-
-    private fun turnAllOff() {
-        sendCommand(
-            bytes = RelayCommands.allOff,
-            successMessage = "全OFF"
-        ) {
-            for (i in relayStates.indices) {
-                relayStates[i] = false
-            }
-        }
-    }
-
-    private fun startTimedOpen() {
-        if (!isConnected) {
-            statusText = "未接続"
-            addLog("タイマー開始失敗: 未接続")
-            currentPane = EnginePane.OPERATION
-            return
-        }
-
-        if (timerRunning) {
-            addLog("タイマー実行中")
-            return
-        }
-
-        val seconds = timerSecondsInput.toDoubleOrNull()
-        if (seconds == null || seconds <= 0.0) {
-            statusText = "秒数を正しく入力してね"
-            addLog("タイマー開始失敗: 秒数が不正")
-            return
-        }
-
-        val ch = timerSelectedChannel
-        val totalMillis = (seconds * 1000.0).toLong()
-
-        thread {
-            runOnUiThread {
-                timerRunning = true
-                timerRemainingText = String.format(Locale.US, "%.2f 秒", seconds)
-                relayStates[ch - 1] = true
-                statusText = "CH$ch を ${timerSecondsInput}秒 ON"
-                addLog("タイマー開始: CH$ch を ${timerSecondsInput}秒 ON")
-            }
-
-            val onResult = relayManager.send(RelayCommands.channelOn(ch))
-            if (onResult.isFailure) {
-                runOnUiThread {
-                    timerRunning = false
-                    timerRemainingText = "-"
-                    relayStates[ch - 1] = false
-                    statusText = "タイマー開始失敗"
-                    addLog("タイマーON失敗: ${onResult.exceptionOrNull()?.message ?: "不明"}")
-                }
-                return@thread
-            }
-
-            val intervalMs = 100L
-            val startTime = System.currentTimeMillis()
-
-            while (true) {
-                if (!timerRunning) {
-                    runOnUiThread {
-                        timerRemainingText = "-"
-                    }
-                    return@thread
-                }
-
-                val elapsed = System.currentTimeMillis() - startTime
-                val remaining = totalMillis - elapsed
-
-                if (remaining <= 0L) {
-                    break
-                }
-
-                runOnUiThread {
-                    timerRemainingText = String.format(
-                        Locale.US,
-                        "%.1f 秒",
-                        remaining / 1000.0
-                    )
-                }
-
-                try {
-                    Thread.sleep(intervalMs)
-                } catch (_: InterruptedException) {
-                    runOnUiThread {
-                        timerRunning = false
-                        timerRemainingText = "-"
-                    }
-                    return@thread
-                }
-            }
-
-            val offResult = relayManager.send(RelayCommands.channelOff(ch))
-
-            runOnUiThread {
-                timerRunning = false
-                timerRemainingText = "0.0 秒"
-                relayStates[ch - 1] = false
-
-                if (offResult.isSuccess) {
-                    statusText = "タイマー完了"
-                    addLog("タイマー完了: CH$ch OFF")
-                } else {
-                    statusText = "タイマーOFF失敗"
-                    addLog("タイマーOFF失敗: ${offResult.exceptionOrNull()?.message ?: "不明"}")
-                }
-            }
-        }
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    private fun RelayApp() {
-        val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
-        val latestLogs = logs.takeLast(20).reversed()
-
-        Scaffold(
-            topBar = {
-                CenterAlignedTopAppBar(
-                    title = { Text("Engine Remote Controller") }
-                )
-            },
-            bottomBar = {
-                PaneSwitcher(
-                    currentPane = currentPane,
-                    onPaneSelected = { currentPane = it }
-                )
-            }
-        ) { innerPadding ->
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-                    .padding(16.dp)
-            ) {
-                StatusCard(
-                    isConnected = isConnected,
-                    permissionGranted = permissionGranted,
-                    statusText = statusText,
-                    selectedDeviceName = selectedDevice?.name ?: "未選択"
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                when (currentPane) {
-                    EnginePane.OPERATION -> OperationPane(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
-
-                    EnginePane.SETTINGS -> SettingsPane(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
-
-                    EnginePane.LOG -> LogPane(
-                        latestLogs = latestLogs,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
-                }
-            }
-        }
     }
 
     private fun runTimedAction(
@@ -533,6 +321,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 engineActionRunning = true
                 runningActionTitle = action.title
+                runningRemainingText = String.format(Locale.US, "%.1f 秒", clampedSeconds)
                 statusText = "${action.title} 実行中..."
                 relayStates[action.channel - 1] = true
                 addLog("${action.title}: CH${action.channel} ON / ${clampedSeconds}秒")
@@ -544,6 +333,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     engineActionRunning = false
                     runningActionTitle = null
+                    runningRemainingText = "-"
                     relayStates[action.channel - 1] = false
                     statusText = "${action.title} ON失敗"
                     addLog("${action.title} ON失敗: ${onResult.exceptionOrNull()?.message ?: "不明"}")
@@ -551,10 +341,42 @@ class MainActivity : ComponentActivity() {
                 return@thread
             }
 
-            try {
-                Thread.sleep(totalMillis)
-            } catch (_: InterruptedException) {
-                // 今回は専用アプリなので特別処理なし
+            val intervalMs = 100L
+            val startTime = System.currentTimeMillis()
+
+            while (true) {
+                if (!engineActionRunning) {
+                    runOnUiThread {
+                        runningRemainingText = "-"
+                    }
+                    return@thread
+                }
+
+                val elapsed = System.currentTimeMillis() - startTime
+                val remaining = totalMillis - elapsed
+
+                if (remaining <= 0L) {
+                    break
+                }
+
+                runOnUiThread {
+                    runningRemainingText = String.format(
+                        Locale.US,
+                        "%.1f 秒",
+                        remaining / 1000.0
+                    )
+                }
+
+                try {
+                    Thread.sleep(intervalMs)
+                } catch (_: InterruptedException) {
+                    runOnUiThread {
+                        engineActionRunning = false
+                        runningActionTitle = null
+                        runningRemainingText = "-"
+                    }
+                    return@thread
+                }
             }
 
             val offResult = relayManager.send(RelayCommands.channelOff(action.channel))
@@ -562,6 +384,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 engineActionRunning = false
                 runningActionTitle = null
+                runningRemainingText = "0.0 秒"
                 relayStates[action.channel - 1] = false
 
                 if (offResult.isSuccess) {
@@ -576,6 +399,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun emergencyAllOff() {
+        if (!isConnected) {
+            statusText = "未接続"
+            addLog("全OFF失敗: 未接続")
+            return
+        }
+
         thread {
             val result = relayManager.send(RelayCommands.allOff)
 
@@ -586,6 +415,7 @@ class MainActivity : ComponentActivity() {
 
                 engineActionRunning = false
                 runningActionTitle = null
+                runningRemainingText = "-"
 
                 if (result.isSuccess) {
                     statusText = "全OFF完了"
@@ -598,180 +428,148 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    @OptIn(ExperimentalMaterial3Api::class)
     @Composable
-    private fun ConnectionPane(modifier: Modifier = Modifier) {
+    private fun RelayApp() {
+        val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
+        val latestLogs = logs.takeLast(20).reversed()
+
+        Scaffold(
+            topBar = {
+                CenterAlignedTopAppBar(
+                    title = { Text("Engine Remote Controller") }
+                )
+            },
+            bottomBar = {
+                PaneSwitcher(
+                    currentPane = currentPane,
+                    onPaneSelected = { currentPane = it }
+                )
+            }
+        ) { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(16.dp)
+            ) {
+                CompactStatusHeader(
+                    isConnected = isConnected,
+                    permissionGranted = permissionGranted,
+                    statusText = statusText,
+                    selectedDeviceName = selectedDevice?.name ?: "未選択"
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                when (currentPane) {
+                    EnginePane.OPERATION -> OperationPane(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+
+                    EnginePane.SETTINGS -> SettingsPane(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+
+                    EnginePane.LOG -> LogPane(
+                        latestLogs = latestLogs,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun OperationPane(modifier: Modifier = Modifier) {
+        val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
+        val mainActions = engineActions.take(3)
+        val chokeActions = engineActions.drop(3)
+
         LazyColumn(
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item(key = "connection_buttons") {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { requestBluetoothPermission() },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("権限")
-                        }
+            item(key = "connection") {
+                ConnectionDashboardCard(
+                    selectedDeviceName = selectedDevice?.name ?: "未選択"
+                )
+            }
 
-                        OutlinedButton(
-                            onClick = { refreshBondedDevices() },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("再読込")
-                        }
-                    }
+            item(key = "emergency") {
+                EmergencyCard()
+            }
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { connectSelectedDevice() },
-                            modifier = Modifier.weight(1f),
-                            enabled = permissionGranted && selectedAddress != null && !isConnected
-                        ) {
-                            Text("接続")
-                        }
+            item(key = "running") {
+                RunningCard()
+            }
 
-                        OutlinedButton(
-                            onClick = { disconnectDevice() },
-                            modifier = Modifier.weight(1f),
-                            enabled = isConnected
-                        ) {
-                            Text("切断")
-                        }
+            item(key = "main_title") {
+                SectionTitle("メイン操作")
+            }
+
+            item(key = "main_actions") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    mainActions.forEachIndexed { index, action ->
+                        LargeEngineActionCard(
+                            action = action,
+                            secondsText = actionSeconds[index],
+                            enabled = isConnected && !engineActionRunning,
+                            running = runningActionTitle == action.title,
+                            onRun = {
+                                runTimedAction(
+                                    action = action,
+                                    secondsText = actionSeconds[index]
+                                )
+                            }
+                        )
                     }
                 }
             }
 
-            item(key = "device_title") {
-                SectionTitle("ペアリング済み機器")
+            item(key = "choke_title") {
+                SectionTitle("チョーク調整")
             }
 
-            if (deviceList.isEmpty()) {
-                item(key = "device_empty") {
-                    InfoCard("端末設定で先にペアリングしてから再読込してね")
-                }
-            } else {
-                items(
-                    items = deviceList,
-                    key = { device -> "device-${device.address}" }
-                ) { device ->
-                    DeviceCard(
-                        device = device,
-                        selected = selectedAddress == device.address,
-                        onSelect = { selectedAddress = device.address }
-                    )
-                }
-            }
-        }
-    }
-
-    @Composable
-    private fun EngineActionCard(
-        action: EngineAction,
-        secondsText: String,
-        onSecondsChange: (String) -> Unit,
-        enabled: Boolean,
-        running: Boolean,
-        onRun: () -> Unit
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = action.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "CH${action.channel} / ${action.description}",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-
-                OutlinedTextField(
-                    value = secondsText,
-                    onValueChange = onSecondsChange,
+            item(key = "choke_actions") {
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("動作秒数") },
-                    singleLine = true,
-                    enabled = enabled,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-
-                Button(
-                    onClick = onRun,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = enabled
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    Text(
-                        if (running) {
-                            "実行中..."
-                        } else {
-                            "${action.title} 実行"
+                    chokeActions.forEachIndexed { localIndex, action ->
+                        val globalIndex = localIndex + 3
+                        Box(modifier = Modifier.weight(1f)) {
+                            SmallEngineActionCard(
+                                action = action,
+                                secondsText = actionSeconds[globalIndex],
+                                enabled = isConnected && !engineActionRunning,
+                                running = runningActionTitle == action.title,
+                                onRun = {
+                                    runTimedAction(
+                                        action = action,
+                                        secondsText = actionSeconds[globalIndex]
+                                    )
+                                }
+                            )
                         }
-                    )
+                    }
                 }
+            }
+
+            item(key = "channel_state") {
+                ChannelStateCard()
             }
         }
     }
 
     @Composable
-    private fun OperationButtonCard(
-        action: EngineAction,
-        secondsText: String,
-        enabled: Boolean,
-        running: Boolean,
-        onRun: () -> Unit
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = action.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Text(
-                    text = "CH${action.channel} / ${secondsText.ifBlank { "?" }} 秒",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-
-                Button(
-                    onClick = onRun,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = enabled
-                ) {
-                    Text(
-                        if (running) {
-                            "実行中..."
-                        } else {
-                            "${action.title} 実行"
-                        }
-                    )
-                }
-            }
-        }
-    }
-
-    @Composable
-    private fun CompactConnectionCard(
+    private fun ConnectionDashboardCard(
         selectedDeviceName: String
     ) {
         Card(
@@ -779,16 +577,29 @@ class MainActivity : ComponentActivity() {
         ) {
             Column(
                 modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text = if (isConnected) "接続中" else "未接続",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "Bluetooth接続",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "選択中: $selectedDeviceName",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
 
-                Text("機器: $selectedDeviceName")
-                Text("詳細: $statusText")
+                    ConnectionDot(isConnected = isConnected)
+                }
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -829,37 +640,23 @@ class MainActivity : ComponentActivity() {
                         Text("切断")
                     }
                 }
+
+                DevicePickerSection()
             }
         }
     }
 
     @Composable
-    private fun OperationPane(modifier: Modifier = Modifier) {
-        val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
-
-        LazyColumn(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+    private fun DevicePickerSection() {
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item {
-                CompactConnectionCard(
-                    selectedDeviceName = selectedDevice?.name ?: "未選択"
-                )
-            }
-
-            item {
-                SectionTitle("Bluetooth機器")
-            }
+            SectionTitle("ペアリング済み機器")
 
             if (deviceList.isEmpty()) {
-                item {
-                    InfoCard("端末設定で先にペアリングしてから再読込してね")
-                }
+                InfoCard("端末設定で先にペアリングしてから再読込してね")
             } else {
-                items(
-                    items = deviceList,
-                    key = { device -> "device-${device.address}" }
-                ) { device ->
+                deviceList.forEach { device ->
                     DeviceCard(
                         device = device,
                         selected = selectedAddress == device.address,
@@ -867,37 +664,205 @@ class MainActivity : ComponentActivity() {
                     )
                 }
             }
+        }
+    }
 
-            item {
+    @Composable
+    private fun EmergencyCard() {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "緊急操作",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
                 Button(
                     onClick = { emergencyAllOff() },
                     modifier = Modifier.fillMaxWidth(),
-                    enabled = isConnected
+                    enabled = isConnected,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    )
                 ) {
                     Text("全OFF")
                 }
             }
+        }
+    }
 
-            item {
-                SectionTitle("基本操作")
+    @Composable
+    private fun RunningCard() {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "実行状態",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                if (engineActionRunning) {
+                    Text("実行中: ${runningActionTitle ?: "不明"}")
+                    Text("残り: $runningRemainingText")
+                } else {
+                    Text("待機中")
+                    Text("次の操作を実行できるよ")
+                }
             }
+        }
+    }
 
-            items(
-                items = engineActions.mapIndexed { index, action -> index to action },
-                key = { (_, action) -> "operation-${action.channel}" }
-            ) { (index, action) ->
-                OperationButtonCard(
-                    action = action,
-                    secondsText = actionSeconds[index],
-                    enabled = isConnected && !engineActionRunning,
-                    running = runningActionTitle == action.title,
-                    onRun = {
-                        runTimedAction(
-                            action = action,
-                            secondsText = actionSeconds[index]
+    @Composable
+    private fun LargeEngineActionCard(
+        action: EngineAction,
+        secondsText: String,
+        enabled: Boolean,
+        running: Boolean,
+        onRun: () -> Unit
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = action.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = action.summary,
+                            style = MaterialTheme.typography.bodyMedium
                         )
                     }
+
+                    StatusChip("${secondsText.ifBlank { "?" }} 秒")
+                }
+
+                Text(
+                    text = action.description,
+                    style = MaterialTheme.typography.bodyMedium
                 )
+
+                Button(
+                    onClick = onRun,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled,
+                    colors = if (action.dangerous) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    }
+                ) {
+                    Text(
+                        if (running) {
+                            "実行中..."
+                        } else {
+                            "${action.title} 実行"
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun SmallEngineActionCard(
+        action: EngineAction,
+        secondsText: String,
+        enabled: Boolean,
+        running: Boolean,
+        onRun: () -> Unit
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = action.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = "CH${action.channel} / ${secondsText.ifBlank { "?" }} 秒",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                Button(
+                    onClick = onRun,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled
+                ) {
+                    Text(if (running) "実行中" else "実行")
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ChannelStateCard() {
+        val visibleChannels = listOf(1, 2, 3, 5, 6)
+
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "使用チャンネル状態",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                visibleChannels.chunked(3).forEach { rowChannels ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        rowChannels.forEach { ch ->
+                            Box(modifier = Modifier.weight(1f)) {
+                                ChannelStateChip(
+                                    ch = ch,
+                                    isOn = relayStates[ch - 1]
+                                )
+                            }
+                        }
+
+                        repeat(3 - rowChannels.size) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
             }
         }
     }
@@ -909,7 +874,7 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item {
-                InfoCard("各操作のON時間を設定するよ。操作画面のボタンはこの秒数で動作する。")
+                InfoCard("各操作のON時間を設定するよ。操作画面のボタンはこの秒数で動作する。入力値は0.1〜5.0秒に丸める。")
             }
 
             item {
@@ -948,229 +913,16 @@ class MainActivity : ComponentActivity() {
                     fontWeight = FontWeight.Bold
                 )
 
-                Text("CH${action.channel}")
+                Text(action.summary)
 
                 OutlinedTextField(
                     value = secondsText,
                     onValueChange = onSecondsChange,
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("動作秒数") },
+                    placeholder = { Text(action.defaultSeconds) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun EnginePaneView(modifier: Modifier = Modifier) {
-        val mainActions = engineActions.take(3)
-
-        LazyColumn(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                InfoCard(
-                    if (isConnected) {
-                        "各操作は指定秒数だけONになって自動でOFFになるよ"
-                    } else {
-                        "先にBluetooth接続してね"
-                    }
-                )
-            }
-
-            item {
-                Button(
-                    onClick = { emergencyAllOff() },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = isConnected
-                ) {
-                    Text("全OFF")
-                }
-            }
-
-            item {
-                SectionTitle("エンジン操作")
-            }
-
-            items(
-                items = mainActions.mapIndexed { index, action -> index to action },
-                key = { (_, action) -> "engine-action-${action.channel}" }
-            ) { (index, action) ->
-                EngineActionCard(
-                    action = action,
-                    secondsText = actionSeconds[index],
-                    onSecondsChange = { actionSeconds[index] = it },
-                    enabled = isConnected && !engineActionRunning,
-                    running = runningActionTitle == action.title,
-                    onRun = {
-                        runTimedAction(
-                            action = action,
-                            secondsText = actionSeconds[index]
-                        )
-                    }
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun ChokePaneView(modifier: Modifier = Modifier) {
-        val chokeActions = engineActions.drop(3)
-
-        LazyColumn(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                InfoCard("チョークの向きが未確認なら、A/B表記のまま少しずつ動かして確認してね")
-            }
-
-            item {
-                SectionTitle("チョーク調整")
-            }
-
-            items(
-                items = chokeActions.mapIndexed { localIndex, action ->
-                    val globalIndex = localIndex + 3
-                    globalIndex to action
-                },
-                key = { (_, action) -> "choke-action-${action.channel}" }
-            ) { (index, action) ->
-                EngineActionCard(
-                    action = action,
-                    secondsText = actionSeconds[index],
-                    onSecondsChange = { actionSeconds[index] = it },
-                    enabled = isConnected && !engineActionRunning,
-                    running = runningActionTitle == action.title,
-                    onRun = {
-                        runTimedAction(
-                            action = action,
-                            secondsText = actionSeconds[index]
-                        )
-                    }
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun TimerPane(modifier: Modifier = Modifier) {
-        val channelRows = listOf(
-            listOf(1, 2, 3, 4),
-            listOf(5, 6, 7, 8)
-        )
-
-        LazyColumn(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item(key = "timer_info") {
-                InfoCard("選んだチャンネルを指定秒数だけONにして、自動でOFFにする")
-            }
-
-            item(key = "timer_selected") {
-                Card(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "タイマー設定",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text("選択中: CH$timerSelectedChannel")
-                        Text(
-                            text = if (timerRunning) "状態: 実行中" else "状態: 待機中",
-                            color = if (timerRunning) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            }
-                        )
-                        Text("残り時間: $timerRemainingText")
-                    }
-                }
-            }
-
-            item(key = "timer_channel_title") {
-                SectionTitle("チャンネル選択")
-            }
-
-            item(key = "timer_channel_grid") {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    channelRows.forEach { rowChannels ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            rowChannels.forEach { ch ->
-                                val selected = timerSelectedChannel == ch
-                                if (selected) {
-                                    Button(
-                                        onClick = { timerSelectedChannel = ch },
-                                        modifier = Modifier.weight(1f),
-                                        enabled = !timerRunning
-                                    ) {
-                                        Text("CH$ch")
-                                    }
-                                } else {
-                                    OutlinedButton(
-                                        onClick = { timerSelectedChannel = ch },
-                                        modifier = Modifier.weight(1f),
-                                        enabled = !timerRunning
-                                    ) {
-                                        Text("CH$ch")
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            item(key = "timer_seconds") {
-                OutlinedTextField(
-                    value = timerSecondsInput,
-                    onValueChange = { timerSecondsInput = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("秒数") },
-                    placeholder = { Text("例: 3  または  1.5") },
-                    singleLine = true,
-                    enabled = !timerRunning,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-                )
-            }
-
-            item(key = "timer_action") {
-                Button(
-                    onClick = { startTimedOpen() },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = isConnected && !timerRunning
-                ) {
-                    Text(
-                        if (timerRunning) {
-                            "実行中..."
-                        } else {
-                            "CH$timerSelectedChannel を ${timerSecondsInput.ifBlank { "?" }}秒 ON"
-                        }
-                    )
-                }
-            }
-
-            item(key = "timer_note") {
-                InfoCard(
-                    if (isConnected) {
-                        "接続中ならこのまま実行できる"
-                    } else {
-                        "先に接続してね"
-                    }
                 )
             }
         }
@@ -1257,7 +1009,7 @@ private fun LogCard(message: String) {
 }
 
 @Composable
-private fun StatusCard(
+private fun CompactStatusHeader(
     isConnected: Boolean,
     permissionGranted: Boolean,
     statusText: String,
@@ -1267,53 +1019,55 @@ private fun StatusCard(
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(
-                text = "状態",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-
             Row(
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(12.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isConnected) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.error
-                            }
-                        )
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    ConnectionDot(isConnected = isConnected)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (isConnected) "接続中" else "未接続",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
 
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Text(
-                    text = if (isConnected) "接続中" else "未接続",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
                 StatusChip("権限: ${if (permissionGranted) "OK" else "未許可"}")
-                StatusChip("機器: $selectedDeviceName")
             }
 
+            Text(
+                text = "機器: $selectedDeviceName",
+                style = MaterialTheme.typography.bodyMedium
+            )
             Text(
                 text = "詳細: $statusText",
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodySmall
             )
         }
     }
+}
+
+@Composable
+private fun ConnectionDot(isConnected: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(14.dp)
+            .clip(CircleShape)
+            .background(
+                if (isConnected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
+            )
+    )
 }
 
 @Composable
@@ -1327,6 +1081,45 @@ private fun StatusChip(text: String) {
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             style = MaterialTheme.typography.bodySmall
         )
+    }
+}
+
+@Composable
+private fun ChannelStateChip(
+    ch: Int,
+    isOn: Boolean
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(999.dp),
+        tonalElevation = if (isOn) 4.dp else 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isOn) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.outline
+                        }
+                    )
+            )
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            Text(
+                text = "CH$ch ${if (isOn) "ON" else "OFF"}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 
@@ -1355,7 +1148,7 @@ private fun DeviceCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             RadioButton(
@@ -1368,74 +1161,13 @@ private fun DeviceCard(
             Column {
                 Text(
                     text = device.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = device.address,
                     style = MaterialTheme.typography.bodySmall
                 )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RelayChannelCard(
-    ch: Int,
-    isOn: Boolean,
-    enabled: Boolean,
-    onOnClick: () -> Unit,
-    onOffClick: () -> Unit
-) {
-    val borderModifier = if (isOn) {
-        Modifier.border(
-            width = 2.dp,
-            color = MaterialTheme.colorScheme.primary,
-            shape = RoundedCornerShape(12.dp)
-        )
-    } else {
-        Modifier
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(borderModifier)
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "CH$ch",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            StatusChip(
-                text = if (isOn) "状態: ON" else "状態: OFF"
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onOnClick,
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled
-                ) {
-                    Text("ON")
-                }
-
-                OutlinedButton(
-                    onClick = onOffClick,
-                    modifier = Modifier.weight(1f),
-                    enabled = enabled
-                ) {
-                    Text("OFF")
-                }
             }
         }
     }
