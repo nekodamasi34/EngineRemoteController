@@ -105,9 +105,8 @@ val engineActions = listOf(
 )
 
 enum class EnginePane(val title: String) {
-    CONNECTION("接続"),
-    ENGINE("エンジン"),
-    CHOKE("チョーク"),
+    OPERATION("操作"),
+    SETTINGS("設定"),
     LOG("ログ")
 }
 
@@ -125,7 +124,7 @@ class MainActivity : ComponentActivity() {
     private var isConnected by mutableStateOf(false)
     private var statusText by mutableStateOf("未接続")
     private var permissionGranted by mutableStateOf(false)
-    private var currentPane by mutableStateOf(EnginePane.ENGINE)
+    private var currentPane by mutableStateOf(EnginePane.OPERATION)
 
     private var timerSelectedChannel by mutableStateOf(1)
     private var timerSecondsInput by mutableStateOf("3")
@@ -269,7 +268,7 @@ class MainActivity : ComponentActivity() {
                     statusText = "接続中"
                     val selectedName = deviceList.firstOrNull { it.address == address }?.name ?: address
                     addLog("接続成功: $selectedName")
-                    currentPane = EnginePane.CONTROL
+                    currentPane = EnginePane.OPERATION
                 } else {
                     isConnected = false
                     statusText = "接続失敗"
@@ -351,7 +350,7 @@ class MainActivity : ComponentActivity() {
         if (!isConnected) {
             statusText = "未接続"
             addLog("タイマー開始失敗: 未接続")
-            currentPane = EnginePane.CONNECTION
+            currentPane = EnginePane.OPERATION
             return
         }
 
@@ -455,7 +454,7 @@ class MainActivity : ComponentActivity() {
         Scaffold(
             topBar = {
                 CenterAlignedTopAppBar(
-                    title = { Text("Relay Controller") }
+                    title = { Text("Engine Remote Controller") }
                 )
             },
             bottomBar = {
@@ -481,19 +480,13 @@ class MainActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 when (currentPane) {
-                    EnginePane.CONNECTION -> ConnectionPane(
+                    EnginePane.OPERATION -> OperationPane(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
                     )
 
-                    EnginePane.ENGINE -> EnginePaneView(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxWidth()
-                    )
-
-                    EnginePane.CHOKE -> ChokePaneView(
+                    EnginePane.SETTINGS -> SettingsPane(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxWidth()
@@ -517,7 +510,7 @@ class MainActivity : ComponentActivity() {
         if (!isConnected) {
             statusText = "未接続"
             addLog("${action.title}失敗: 未接続")
-            currentPane = EnginePane.CONNECTION
+            currentPane = EnginePane.OPERATION
             return
         }
 
@@ -735,6 +728,241 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun OperationButtonCard(
+        action: EngineAction,
+        secondsText: String,
+        enabled: Boolean,
+        running: Boolean,
+        onRun: () -> Unit
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = action.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text(
+                    text = "CH${action.channel} / ${secondsText.ifBlank { "?" }} 秒",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Button(
+                    onClick = onRun,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = enabled
+                ) {
+                    Text(
+                        if (running) {
+                            "実行中..."
+                        } else {
+                            "${action.title} 実行"
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun CompactConnectionCard(
+        selectedDeviceName: String
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = if (isConnected) "接続中" else "未接続",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text("機器: $selectedDeviceName")
+                Text("詳細: $statusText")
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { requestBluetoothPermission() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("権限")
+                    }
+
+                    OutlinedButton(
+                        onClick = { refreshBondedDevices() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("再読込")
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = { connectSelectedDevice() },
+                        modifier = Modifier.weight(1f),
+                        enabled = permissionGranted && selectedAddress != null && !isConnected
+                    ) {
+                        Text("接続")
+                    }
+
+                    OutlinedButton(
+                        onClick = { disconnectDevice() },
+                        modifier = Modifier.weight(1f),
+                        enabled = isConnected
+                    ) {
+                        Text("切断")
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun OperationPane(modifier: Modifier = Modifier) {
+        val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
+
+        LazyColumn(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                CompactConnectionCard(
+                    selectedDeviceName = selectedDevice?.name ?: "未選択"
+                )
+            }
+
+            item {
+                SectionTitle("Bluetooth機器")
+            }
+
+            if (deviceList.isEmpty()) {
+                item {
+                    InfoCard("端末設定で先にペアリングしてから再読込してね")
+                }
+            } else {
+                items(
+                    items = deviceList,
+                    key = { device -> "device-${device.address}" }
+                ) { device ->
+                    DeviceCard(
+                        device = device,
+                        selected = selectedAddress == device.address,
+                        onSelect = { selectedAddress = device.address }
+                    )
+                }
+            }
+
+            item {
+                Button(
+                    onClick = { emergencyAllOff() },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = isConnected
+                ) {
+                    Text("全OFF")
+                }
+            }
+
+            item {
+                SectionTitle("基本操作")
+            }
+
+            items(
+                items = engineActions.mapIndexed { index, action -> index to action },
+                key = { (_, action) -> "operation-${action.channel}" }
+            ) { (index, action) ->
+                OperationButtonCard(
+                    action = action,
+                    secondsText = actionSeconds[index],
+                    enabled = isConnected && !engineActionRunning,
+                    running = runningActionTitle == action.title,
+                    onRun = {
+                        runTimedAction(
+                            action = action,
+                            secondsText = actionSeconds[index]
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun SettingsPane(modifier: Modifier = Modifier) {
+        LazyColumn(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                InfoCard("各操作のON時間を設定するよ。操作画面のボタンはこの秒数で動作する。")
+            }
+
+            item {
+                SectionTitle("動作秒数")
+            }
+
+            items(
+                items = engineActions.mapIndexed { index, action -> index to action },
+                key = { (_, action) -> "settings-${action.channel}" }
+            ) { (index, action) ->
+                SettingSecondsCard(
+                    action = action,
+                    secondsText = actionSeconds[index],
+                    onSecondsChange = { actionSeconds[index] = it }
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun SettingSecondsCard(
+        action: EngineAction,
+        secondsText: String,
+        onSecondsChange: (String) -> Unit
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = action.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Text("CH${action.channel}")
+
+                OutlinedTextField(
+                    value = secondsText,
+                    onValueChange = onSecondsChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("動作秒数") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+                )
+            }
+        }
+    }
+
+    @Composable
     private fun EnginePaneView(modifier: Modifier = Modifier) {
         val mainActions = engineActions.take(3)
 
@@ -769,46 +997,6 @@ class MainActivity : ComponentActivity() {
             items(
                 items = mainActions.mapIndexed { index, action -> index to action },
                 key = { (_, action) -> "engine-action-${action.channel}" }
-            ) { (index, action) ->
-                EngineActionCard(
-                    action = action,
-                    secondsText = actionSeconds[index],
-                    onSecondsChange = { actionSeconds[index] = it },
-                    enabled = isConnected && !engineActionRunning,
-                    running = runningActionTitle == action.title,
-                    onRun = {
-                        runTimedAction(
-                            action = action,
-                            secondsText = actionSeconds[index]
-                        )
-                    }
-                )
-            }
-        }
-    }
-
-    @Composable
-    private fun ChokePaneView(modifier: Modifier = Modifier) {
-        val chokeActions = engineActions.drop(3)
-
-        LazyColumn(
-            modifier = modifier,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                InfoCard("チョークの向きが未確認なら、A/B表記のまま少しずつ動かして確認してね")
-            }
-
-            item {
-                SectionTitle("チョーク調整")
-            }
-
-            items(
-                items = chokeActions.mapIndexed { localIndex, action ->
-                    val globalIndex = localIndex + 3
-                    globalIndex to action
-                },
-                key = { (_, action) -> "choke-action-${action.channel}" }
             ) { (index, action) ->
                 EngineActionCard(
                     action = action,
