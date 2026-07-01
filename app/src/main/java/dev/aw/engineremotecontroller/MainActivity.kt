@@ -53,6 +53,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import java.util.Locale
@@ -100,15 +101,15 @@ val engineActions = listOf(
         title = "チョークA",
         channel = 5,
         defaultSeconds = "0.5",
-        summary = "CH5",
-        description = "少しずつ調整"
+        summary = "CH5 / A方向",
+        description = "強める方向・弱める方向のどちらか"
     ),
     EngineAction(
         title = "チョークB",
         channel = 6,
         defaultSeconds = "0.5",
-        summary = "CH6",
-        description = "少しずつ調整"
+        summary = "CH6 / B方向",
+        description = "A方向とは逆向き"
     )
 )
 
@@ -593,7 +594,8 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun OperationPane(modifier: Modifier = Modifier) {
         val mainActions = engineActions.take(3)
-        val chokeActions = engineActions.drop(3)
+        val chokeA = engineActions[3]
+        val chokeB = engineActions[4]
 
         Column(
             modifier = modifier,
@@ -606,7 +608,7 @@ class MainActivity : ComponentActivity() {
                 OperationInfoCard(
                     modifier = Modifier.weight(1f)
                 )
-                EmergencyMiniCard(
+                EmergencyStopCard(
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -653,26 +655,17 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    SectionTitle("チョーク")
-                    chokeActions.forEachIndexed { localIndex, action ->
-                        val globalIndex = localIndex + 3
-                        OperationActionCard(
-                            action = action,
-                            secondsText = actionSeconds[globalIndex],
-                            enabled = isConnected && !engineActionRunning,
-                            running = runningActionTitle == action.title,
-                            compact = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f),
-                            onRun = {
-                                runTimedAction(
-                                    action = action,
-                                    secondsText = actionSeconds[globalIndex]
-                                )
-                            }
-                        )
-                    }
+                    ChokeControlCard(
+                        chokeA = chokeA,
+                        chokeB = chokeB,
+                        chokeASeconds = actionSeconds[3],
+                        chokeBSeconds = actionSeconds[4],
+                        enabled = isConnected && !engineActionRunning,
+                        runningTitle = runningActionTitle,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                    )
 
                     ChannelStateMiniCard(
                         modifier = Modifier.fillMaxWidth()
@@ -703,28 +696,57 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun EmergencyMiniCard(modifier: Modifier = Modifier) {
+    private fun EmergencyStopCard(modifier: Modifier = Modifier) {
         Card(modifier = modifier) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = "緊急",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "非常停止",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "全リレーOFF",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
 
                 Button(
                     onClick = { emergencyAllOff() },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.size(112.dp),
                     enabled = isConnected,
+                    shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError
                     )
                 ) {
-                    Text("全OFF")
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = "STOP",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "全OFF",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }
@@ -775,14 +797,13 @@ class MainActivity : ComponentActivity() {
         enabled: Boolean,
         running: Boolean,
         modifier: Modifier = Modifier,
-        compact: Boolean = false,
         onRun: () -> Unit
     ) {
         Card(modifier = modifier) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(if (compact) 10.dp else 12.dp),
+                    .padding(12.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Column(
@@ -790,19 +811,17 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Text(
                         text = action.title,
-                        style = if (compact) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleLarge,
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = "${action.summary} / ${secondsText.ifBlank { "?" }}秒",
                         style = MaterialTheme.typography.bodySmall
                     )
-                    if (!compact) {
-                        Text(
-                            text = action.description,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
+                    Text(
+                        text = action.description,
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
 
                 Button(
@@ -825,8 +844,121 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun ChokeControlCard(
+        chokeA: EngineAction,
+        chokeB: EngineAction,
+        chokeASeconds: String,
+        chokeBSeconds: String,
+        enabled: Boolean,
+        runningTitle: String?,
+        modifier: Modifier = Modifier
+    ) {
+        Card(modifier = modifier) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "チョーク調整",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "A/Bのどちらかが強く、もう片方が弱くする方向",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ChokeDirectionButton(
+                        label = "A方向",
+                        action = chokeA,
+                        secondsText = chokeASeconds,
+                        enabled = enabled,
+                        running = runningTitle == chokeA.title,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        onRun = {
+                            runTimedAction(
+                                action = chokeA,
+                                secondsText = chokeASeconds
+                            )
+                        }
+                    )
+
+                    ChokeDirectionButton(
+                        label = "B方向",
+                        action = chokeB,
+                        secondsText = chokeBSeconds,
+                        enabled = enabled,
+                        running = runningTitle == chokeB.title,
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight(),
+                        onRun = {
+                            runTimedAction(
+                                action = chokeB,
+                                secondsText = chokeBSeconds
+                            )
+                        }
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun ChokeDirectionButton(
+        label: String,
+        action: EngineAction,
+        secondsText: String,
+        enabled: Boolean,
+        running: Boolean,
+        modifier: Modifier = Modifier,
+        onRun: () -> Unit
+    ) {
+        Button(
+            onClick = onRun,
+            modifier = modifier,
+            enabled = enabled
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = label,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "CH${action.channel}",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = if (running) "実行中" else "${secondsText.ifBlank { "?" }}秒",
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+
+    @Composable
     private fun ChannelStateMiniCard(modifier: Modifier = Modifier) {
-        val visibleChannels = listOf(1, 2, 3, 5, 6)
+        val visibleChannels = (1..8).toList()
 
         Card(modifier = modifier) {
             Column(
@@ -834,12 +966,12 @@ class MainActivity : ComponentActivity() {
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    text = "CH状態",
+                    text = "CH状態 1〜8",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
 
-                visibleChannels.chunked(3).forEach { rowChannels ->
+                visibleChannels.chunked(4).forEach { rowChannels ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -851,9 +983,6 @@ class MainActivity : ComponentActivity() {
                                     isOn = relayStates[ch - 1]
                                 )
                             }
-                        }
-                        repeat(3 - rowChannels.size) {
-                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
@@ -1091,7 +1220,7 @@ private fun ChannelStateChip(
         tonalElevation = if (isOn) 4.dp else 1.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -1111,7 +1240,7 @@ private fun ChannelStateChip(
             Spacer(modifier = Modifier.width(4.dp))
 
             Text(
-                text = "CH$ch",
+                text = "CH$ch ${if (isOn) "ON" else "OFF"}",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold
             )
