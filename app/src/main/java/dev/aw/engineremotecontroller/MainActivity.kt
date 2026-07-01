@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import java.util.Locale
 import kotlin.concurrent.thread
@@ -625,7 +626,10 @@ class MainActivity : ComponentActivity() {
                         .fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    SectionTitle("メイン操作")
+                    RunningMiniCard(
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
                     mainActions.forEachIndexed { index, action ->
                         OperationActionCard(
                             action = action,
@@ -651,10 +655,6 @@ class MainActivity : ComponentActivity() {
                         .fillMaxHeight(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    RunningMiniCard(
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
                     ChokeControlCard(
                         chokeA = chokeA,
                         chokeB = chokeB,
@@ -974,7 +974,7 @@ class MainActivity : ComponentActivity() {
                 visibleChannels.chunked(4).forEach { rowChannels ->
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        horizontalArrangement = Arrangement.spacedBy(1.dp)
                     ) {
                         rowChannels.forEach { ch ->
                             Box(modifier = Modifier.weight(1f)) {
@@ -1242,7 +1242,8 @@ private fun ChannelStateChip(
             Text(
                 text = "CH$ch ${if (isOn) "ON" else "OFF"}",
                 style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                fontSize = 10.sp,
             )
         }
     }
