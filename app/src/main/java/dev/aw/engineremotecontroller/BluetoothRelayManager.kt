@@ -8,7 +8,7 @@ import android.bluetooth.BluetoothSocket
 import android.content.Context
 import java.util.UUID
 
-class BluetoothRelayManager(context: Context) {
+class BluetoothRelayManager(context: Context) : RelayTransport {
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
     private val adapter: BluetoothAdapter?
         get() = bluetoothManager?.adapter
@@ -26,7 +26,7 @@ class BluetoothRelayManager(context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun connect(address: String): Result<Unit> = runCatching {
+    override fun connect(address: String): Result<Unit> = runCatching {
         val device = adapter?.getRemoteDevice(address)
             ?: error("Bluetoothアダプタが使えない")
 
@@ -63,32 +63,14 @@ class BluetoothRelayManager(context: Context) {
         )
     }
 
-    fun send(bytes: ByteArray): Result<Unit> = runCatching {
+    override fun send(bytes: ByteArray): Result<Unit> = runCatching {
         val outputStream = socket?.outputStream ?: error("Bluetooth未接続")
         outputStream.write(bytes)
         outputStream.flush()
     }
 
-    fun disconnect() {
+    override fun disconnect() {
         runCatching { socket?.close() }
         socket = null
     }
-}
-
-object RelayCommands {
-    fun channelOn(ch: Int): ByteArray = byteArrayOf(
-        0xFD.toByte(), 0x02, 0x20, ch.toByte(), 0x01, 0x5D
-    )
-
-    fun channelOff(ch: Int): ByteArray = byteArrayOf(
-        0xFD.toByte(), 0x02, 0x20, ch.toByte(), 0x00, 0x5D
-    )
-
-    val allOn: ByteArray = byteArrayOf(
-        0xFD.toByte(), 0x02, 0x20, 0xEF.toByte(), 0xFF.toByte(), 0x5D
-    )
-
-    val allOff: ByteArray = byteArrayOf(
-        0xFD.toByte(), 0x02, 0x20, 0xEF.toByte(), 0x00, 0x5D
-    )
 }

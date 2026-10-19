@@ -2,9 +2,14 @@ package dev.aw.engineremotecontroller
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -54,12 +59,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import java.util.Locale
-import kotlin.concurrent.thread
 
 data class DeviceUi(
     val name: String,
@@ -124,11 +129,55 @@ enum class EnginePane(val title: String) {
 
 class MainActivity : ComponentActivity() {
     private lateinit var relayManager: BluetoothRelayManager
+    private lateinit var relayController: RelayController
+    private var relayService: RelayService? = null
+    private var serviceBound = false
+    private var activityClosing = false
+    private var remoteUrl by mutableStateOf("")
+    private var remoteDeviceId by mutableStateOf("engine-1")
+    private var remoteToken by mutableStateOf("")
+    private var remoteRunning by mutableStateOf(false)
+    private var remoteStatus by mutableStateOf("遠隔待受停止中")
+
+    private val serviceListener: (RelayUpdate) -> Unit = { update ->
+        runOnUiThread {
+            if (!activityClosing && ::relayController.isInitialized && relayController.isCurrent(update)) {
+                val wasConnected = isConnected
+                isConnected = update.state.connected
+                engineActionRunning = update.state.busy
+                runningActionTitle = update.state.actionTitle
+                runningRemainingText = update.state.remainingMillis?.let {
+                    String.format(Locale.US, "%.1f 秒", it / 1000.0)
+                } ?: "-"
+                update.state.channels.forEachIndexed { index, state -> relayStates[index] = state }
+                statusText = update.state.status
+                update.log?.let { if (logs.lastOrNull() != it) addLog(it) }
+                remoteRunning = relayService?.remoteRunning == true
+                remoteStatus = relayService?.remoteStatus ?: "遠隔待受停止中"
+                if (!wasConnected && isConnected) currentPane = EnginePane.OPERATION
+            }
+        }
+    }
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            val service = (binder as RelayService.LocalBinder).service
+            relayService = service
+            relayController = service.controller
+            service.addListener(serviceListener)
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            relayService = null
+            isConnected = false
+            remoteRunning = false
+            remoteStatus = "サービスが終了しました。待受を開始し直してください"
+        }
+    }
 
     private val deviceList = mutableStateListOf<DeviceUi>()
     private val relayStates = mutableStateListOf(
-        false, false, false, false,
-        false, false, false, false
+        RelayChannelState.UNKNOWN, RelayChannelState.UNKNOWN, RelayChannelState.UNKNOWN, RelayChannelState.UNKNOWN,
+        RelayChannelState.UNKNOWN, RelayChannelState.UNKNOWN, RelayChannelState.UNKNOWN, RelayChannelState.UNKNOWN
     )
     private val logs = mutableStateListOf<String>()
 
@@ -150,9 +199,6 @@ class MainActivity : ComponentActivity() {
     private var runningActionTitle by mutableStateOf<String?>(null)
     private var runningRemainingText by mutableStateOf("-")
 
-    @Volatile
-    private var actionCancelRequested = false
-
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
             permissionGranted = hasBluetoothPermissions()
@@ -170,6 +216,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         relayManager = BluetoothRelayManager(applicationContext)
+        val saved = RemoteSettings(this).load()
+        remoteUrl = saved.baseUrl
+        remoteDeviceId = saved.deviceId
+        remoteToken = saved.token
+        selectedAddress = saved.bluetoothAddress.ifBlank { null }
+        serviceBound = bindService(Intent(this, RelayService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
         permissionGranted = hasBluetoothPermissions()
 
         if (permissionGranted) {
@@ -184,8 +236,9 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        actionCancelRequested = true
-        relayManager.disconnect()
+        activityClosing = true
+        relayService?.removeListener(serviceListener)
+        if (serviceBound) unbindService(serviceConnection)
         super.onDestroy()
     }
 
@@ -260,6 +313,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectSelectedDevice() {
+        if (relayService == null) { statusText = "サービス準備中"; return }
         val address = selectedAddress
         if (address == null) {
             statusText = "機器を選んでね"
@@ -267,38 +321,14 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        thread {
-            runOnUiThread {
-                statusText = "接続中..."
-            }
-
-            val result = relayManager.connect(address)
-
-            runOnUiThread {
-                if (result.isSuccess) {
-                    isConnected = true
-                    statusText = "接続中"
-                    val selectedName = deviceList.firstOrNull { it.address == address }?.name ?: address
-                    addLog("接続成功: $selectedName")
-                    currentPane = EnginePane.OPERATION
-                } else {
-                    isConnected = false
-                    statusText = "接続失敗"
-                    addLog("接続失敗: ${result.exceptionOrNull()?.message ?: "不明"}")
-                }
-            }
-        }
+        val selectedName = deviceList.firstOrNull { it.address == address }?.name ?: address
+        relayService?.connect(address, selectedName)
     }
 
     private fun disconnectDevice() {
-        actionCancelRequested = true
-        relayManager.disconnect()
-        isConnected = false
-        engineActionRunning = false
-        runningActionTitle = null
-        runningRemainingText = "-"
-        statusText = "切断済み"
-        addLog("切断した")
+        relayService?.stopRemote()
+        if (!::relayController.isInitialized) return
+        relayController.disconnect()
     }
 
     private fun runTimedAction(
@@ -317,8 +347,14 @@ class MainActivity : ComponentActivity() {
             return
         }
 
+        if (relayStates.any { it == RelayChannelState.UNKNOWN }) {
+            statusText = "リレー状態不明 / 全OFFを再送してね"
+            addLog("${action.title}失敗: リレー状態不明")
+            return
+        }
+
         val seconds = secondsText.toDoubleOrNull()
-        if (seconds == null || seconds <= 0.0) {
+        if (seconds == null || !seconds.isFinite() || seconds <= 0.0) {
             statusText = "秒数を正しく入力してね"
             addLog("${action.title}失敗: 秒数が不正")
             return
@@ -327,90 +363,7 @@ class MainActivity : ComponentActivity() {
         val clampedSeconds = seconds.coerceIn(0.1, 5.0)
         val totalMillis = (clampedSeconds * 1000.0).toLong()
 
-        actionCancelRequested = false
-        engineActionRunning = true
-        runningActionTitle = action.title
-        runningRemainingText = String.format(Locale.US, "%.1f 秒", clampedSeconds)
-        statusText = "${action.title} 実行中..."
-        relayStates[action.channel - 1] = true
-        addLog("${action.title}: CH${action.channel} ON / ${clampedSeconds}秒")
-
-        thread {
-            val onResult = relayManager.send(RelayCommands.channelOn(action.channel))
-
-            if (onResult.isFailure) {
-                runOnUiThread {
-                    engineActionRunning = false
-                    runningActionTitle = null
-                    runningRemainingText = "-"
-                    relayStates[action.channel - 1] = false
-                    statusText = "${action.title} ON失敗"
-                    addLog("${action.title} ON失敗: ${onResult.exceptionOrNull()?.message ?: "不明"}")
-                }
-                return@thread
-            }
-
-            val intervalMs = 100L
-            val startTime = System.currentTimeMillis()
-
-            while (true) {
-                if (actionCancelRequested) {
-                    runOnUiThread {
-                        runningRemainingText = "-"
-                    }
-                    return@thread
-                }
-
-                val elapsed = System.currentTimeMillis() - startTime
-                val remaining = totalMillis - elapsed
-
-                if (remaining <= 0L) {
-                    break
-                }
-
-                runOnUiThread {
-                    if (!actionCancelRequested) {
-                        runningRemainingText = String.format(
-                            Locale.US,
-                            "%.1f 秒",
-                            remaining / 1000.0
-                        )
-                    }
-                }
-
-                try {
-                    Thread.sleep(intervalMs)
-                } catch (_: InterruptedException) {
-                    runOnUiThread {
-                        engineActionRunning = false
-                        runningActionTitle = null
-                        runningRemainingText = "-"
-                    }
-                    return@thread
-                }
-            }
-
-            if (actionCancelRequested) {
-                return@thread
-            }
-
-            val offResult = relayManager.send(RelayCommands.channelOff(action.channel))
-
-            runOnUiThread {
-                engineActionRunning = false
-                runningActionTitle = null
-                runningRemainingText = "0.0 秒"
-                relayStates[action.channel - 1] = false
-
-                if (offResult.isSuccess) {
-                    statusText = "${action.title} 完了"
-                    addLog("${action.title}: CH${action.channel} OFF")
-                } else {
-                    statusText = "${action.title} OFF失敗"
-                    addLog("${action.title} OFF失敗: ${offResult.exceptionOrNull()?.message ?: "不明"}")
-                }
-            }
-        }
+        relayController.runTimedAction(action.title, action.channel, totalMillis)
     }
 
     private fun emergencyAllOff() {
@@ -420,30 +373,27 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        actionCancelRequested = true
+        relayController.emergencyAllOff()
+    }
 
-        thread {
-            val result = relayManager.send(RelayCommands.allOff)
-
-            runOnUiThread {
-                for (i in relayStates.indices) {
-                    relayStates[i] = false
-                }
-
-                engineActionRunning = false
-                runningActionTitle = null
-                runningRemainingText = "-"
-
-                if (result.isSuccess) {
-                    statusText = "全OFF完了"
-                    addLog("全OFF送信")
-                } else {
-                    statusText = "全OFF失敗"
-                    addLog("全OFF失敗: ${result.exceptionOrNull()?.message ?: "不明"}")
-                }
+    private fun startRemoteReceiver() {
+        if (relayService == null) { remoteStatus = "サービス準備中"; return }
+        if (!hasBluetoothPermissions()) { requestBluetoothPermission(); return }
+        try {
+            require(!engineActionRunning) { "操作完了後に待受を開始してください" }
+            val config = RemoteConfig(remoteUrl.trim(), remoteDeviceId.trim(), remoteToken.trim(), selectedAddress ?: "")
+            RemoteSettings(this).save(config)
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
+            ContextCompat.startForegroundService(this, Intent(this, RelayService::class.java).setAction(RelayService.START_REMOTE))
+            remoteStatus = "遠隔待受を開始しています"
+        } catch (e: Exception) {
+            remoteStatus = e.message ?: "遠隔待受を開始できませんでした"
         }
     }
+
+    private val notificationPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
@@ -553,7 +503,7 @@ class MainActivity : ComponentActivity() {
                             Button(
                                 onClick = { connectSelectedDevice() },
                                 modifier = Modifier.weight(1f),
-                                enabled = permissionGranted && selectedAddress != null && !isConnected
+                                enabled = permissionGranted && selectedAddress != null && !isConnected && !engineActionRunning
                             ) {
                                 Text("接続")
                             }
@@ -561,7 +511,7 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(
                                 onClick = { disconnectDevice() },
                                 modifier = Modifier.weight(1f),
-                                enabled = isConnected
+                                enabled = isConnected && !(engineActionRunning && runningActionTitle == null)
                             ) {
                                 Text("切断")
                             }
@@ -637,7 +587,7 @@ class MainActivity : ComponentActivity() {
                         OperationActionCard(
                             action = action,
                             secondsText = actionSeconds[index],
-                            enabled = isConnected && !engineActionRunning,
+                            enabled = isConnected && !engineActionRunning && relayStates.none { it == RelayChannelState.UNKNOWN },
                             running = runningActionTitle == action.title,
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -663,7 +613,7 @@ class MainActivity : ComponentActivity() {
                         chokeB = chokeB,
                         chokeASeconds = actionSeconds[3],
                         chokeBSeconds = actionSeconds[4],
-                        enabled = isConnected && !engineActionRunning,
+                        enabled = isConnected && !engineActionRunning && relayStates.none { it == RelayChannelState.UNKNOWN },
                         runningTitle = runningActionTitle,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -750,7 +700,7 @@ class MainActivity : ComponentActivity() {
 
                 if (engineActionRunning) {
                     Text(
-                        text = runningActionTitle ?: "実行中",
+                        text = runningActionTitle ?: statusText,
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold
                     )
@@ -760,12 +710,16 @@ class MainActivity : ComponentActivity() {
                     )
                 } else {
                     Text(
-                        text = "待機中",
+                        text = if (relayStates.any { it == RelayChannelState.UNKNOWN }) "状態不明" else "待機中",
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "操作できます",
+                        text = when {
+                            !isConnected -> "接続してください"
+                            relayStates.any { it == RelayChannelState.UNKNOWN } -> "全OFFを再送してください"
+                            else -> "操作できます"
+                        },
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
@@ -963,7 +917,7 @@ class MainActivity : ComponentActivity() {
                             Box(modifier = Modifier.weight(1f)) {
                                 ChannelStateChip(
                                     ch = ch,
-                                    isOn = relayStates[ch - 1]
+                                    state = relayStates[ch - 1]
                                 )
                             }
                         }
@@ -979,6 +933,23 @@ class MainActivity : ComponentActivity() {
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item(key = "remote_settings") {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SectionTitle("Cloudflare遠隔待受")
+                        Text("接続タブでBluetooth機器を選び、公開したサイトURLと端末キーを設定してください。")
+                        OutlinedTextField(value = remoteUrl, onValueChange = { remoteUrl = it }, label = { Text("サイトURL（https://…）") }, singleLine = true, enabled = !remoteRunning, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = remoteDeviceId, onValueChange = { remoteDeviceId = it }, label = { Text("端末ID") }, singleLine = true, enabled = !remoteRunning, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(value = remoteToken, onValueChange = { remoteToken = it }, label = { Text("端末キー") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), enabled = !remoteRunning, modifier = Modifier.fillMaxWidth())
+                        Text(remoteStatus, style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = { startRemoteReceiver() }, enabled = !remoteRunning && !engineActionRunning) { Text("保存して待受開始") }
+                            OutlinedButton(onClick = { relayService?.stopRemote() }, enabled = remoteRunning) { Text("待受停止・全OFF") }
+                        }
+                        Text("待受中は画面を閉じても動作します。端末の再起動後は手動で待受を開始してください。", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
             item {
                 InfoCard("各操作のON時間を設定するよ。操作画面のボタンはこの秒数で動作する。入力値は0.1〜5.0秒に丸める。")
             }
@@ -1195,12 +1166,12 @@ private fun StatusChip(text: String) {
 @Composable
 private fun ChannelStateChip(
     ch: Int,
-    isOn: Boolean
+    state: RelayChannelState
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(999.dp),
-        tonalElevation = if (isOn) 4.dp else 1.dp
+        tonalElevation = if (state == RelayChannelState.ON) 4.dp else 1.dp
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
@@ -1212,10 +1183,10 @@ private fun ChannelStateChip(
                     .size(8.dp)
                     .clip(CircleShape)
                     .background(
-                        if (isOn) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.outline
+                        when (state) {
+                            RelayChannelState.ON -> MaterialTheme.colorScheme.primary
+                            RelayChannelState.OFF -> MaterialTheme.colorScheme.outline
+                            RelayChannelState.UNKNOWN -> MaterialTheme.colorScheme.error
                         }
                     )
             )
@@ -1223,7 +1194,11 @@ private fun ChannelStateChip(
             Spacer(modifier = Modifier.width(4.dp))
 
             Text(
-                text = "CH$ch ${if (isOn) "ON" else "OFF"}",
+                text = "CH$ch ${when (state) {
+                    RelayChannelState.ON -> "ON"
+                    RelayChannelState.OFF -> "OFF"
+                    RelayChannelState.UNKNOWN -> "不明"
+                }}",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Bold,
                 fontSize = 10.sp,

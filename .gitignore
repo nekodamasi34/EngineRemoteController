@@ -13,3 +13,10 @@
 .externalNativeBuild
 .cxx
 local.properties
+cloudflare/node_modules/
+cloudflare/.wrangler/
+cloudflare/.npm-cache/
+cloudflare/.dev.vars
+cloudflare/.dev.vars.*
+!cloudflare/.dev.vars.example
+cloudflare/.env*
