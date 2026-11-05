@@ -3,6 +3,6 @@
     <base-config cleartextTrafficPermitted="false" />
     <!-- Replace with the camera's reserved LAN IP before building. No wildcard. -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="false">192.168.1.100</domain>
+        <domain includeSubdomains="false">10.103.210.120</domain>
     </domain-config>
 </network-security-config>
