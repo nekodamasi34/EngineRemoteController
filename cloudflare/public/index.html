@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Engine Remote Controller</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+</head>
+<body>
+  <header><div><span class="eyebrow">ENGINE REMOTE</span><h1>エンジン操作</h1></div><button id="logout" class="quiet" hidden>ログアウト</button></header>
+  <main>
+    <section id="login-panel" class="panel login">
+      <h2>操作画面にログイン</h2><p>設定した操作キーを入力してください。</p>
+      <form id="login-form"><label for="token">操作キー</label><input id="token" type="password" autocomplete="current-password" required maxlength="256"><button class="primary" type="submit">ログイン</button></form>
+    </section>
+    <div id="dashboard" hidden>
+      <section class="panel connection"><div><span class="eyebrow">現地端末</span><h2 id="connection">確認中</h2><p id="device-status">接続状態を取得しています</p></div><div class="seen">最終応答<span id="last-seen">—</span></div></section>
+      <div id="channels" class="channels" aria-label="リレーの状態"></div>
+      <section class="panel"><div class="section-head"><h2>操作</h2><label class="duration">動作時間 <input id="seconds" type="number" min="0.1" max="5" step="0.1" value="1.0"> 秒</label></div>
+        <div id="actions" class="actions"></div><button id="all-off" class="stop" disabled>全リレーOFF</button>
+        <p class="note">全リレーOFFはエンジン停止とは別の操作です。表示するON/OFFは送信結果からの推定です。</p>
+        <p id="setup-note" class="note">初期設定ではアラームと全OFFのみ有効です。</p>
+      </section>
+      <section class="panel"><h2>最近の操作</h2><p id="empty-history">まだ操作はありません</p><ol id="history"></ol></section>
+    </div>
+    <p id="message" role="status" aria-live="polite"></p>
+  </main>
+</body>
+</html>

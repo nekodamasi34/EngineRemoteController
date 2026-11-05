@@ -1,0 +1,4 @@
+# Generate two different random keys with at least 32 characters.
+# Do not use your Cloudflare account API token here.
+OPERATOR_TOKEN=replace-with-random-web-operation-key
+DEVICE_TOKEN=replace-with-a-different-random-device-key

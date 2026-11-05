@@ -1,0 +1,15 @@
+{
+  "name": "engine-remote-cloudflare",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup:local": "node scripts/setup-local.mjs",
+    "dev": "wrangler dev",
+    "test": "node --test test/worker.test.mjs",
+    "test:smoke": "node test/smoke.mjs",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 migrations apply engine-remote --local",
+    "db:remote": "wrangler d1 migrations apply engine-remote --remote"
+  },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}

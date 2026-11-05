@@ -1,0 +1,21 @@
+{
+  "name": "engine-remote",
+  "main": "src/worker.mjs",
+  "compatibility_date": "2026-10-09",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "vars": {
+    "DEVICE_ID": "engine-1",
+    "ALLOWED_ACTIONS": "alarm,all_off"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "engine-remote",
+    "database_id": "7269fc18-47cd-4ba6-b439-ad10f0c4a172",
+    "migrations_dir": "migrations"
+  }]
+}
