@@ -10,8 +10,9 @@
   },
   "vars": {
     "DEVICE_ID": "engine-1",
-    "ALLOWED_ACTIONS": "alarm,all_off"
+    "ALLOWED_ACTIONS": "alarm,all_off,ignition,engine_stop,choke_a,choke_b"
   },
+  "r2_buckets": [{ "binding": "CAMERA_BUCKET", "bucket_name": "engine-remote-camera" }],
   "d1_databases": [{
     "binding": "DB",
     "database_name": "engine-remote",

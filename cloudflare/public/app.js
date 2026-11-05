@@ -12,7 +12,7 @@ async function api(path, data) {
   } finally { clearTimeout(timeout); }
 }
 function message(text = '') { $('message').textContent = text; }
-function loginView(visible) { $('login-panel').hidden = !visible; $('dashboard').hidden = visible; $('logout').hidden = visible; }
+function loginView(visible) { if (visible && typeof stopCamera === 'function') stopCamera(); $('login-panel').hidden = !visible; $('dashboard').hidden = visible; $('logout').hidden = visible; }
 function disableActions() { $('actions').querySelectorAll('button').forEach(b => b.disabled = true); $('all-off').disabled = true; }
 function render(data) {
   current = data; const d = data.device;

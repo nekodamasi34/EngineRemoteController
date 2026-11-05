@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Engine Remote Controller</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script>
+  <link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/camera.js" defer></script>
 </head>
 <body>
   <header><div><span class="eyebrow">ENGINE REMOTE</span><h1>エンジン操作</h1></div><button id="logout" class="quiet" hidden>ログアウト</button></header>
@@ -20,6 +20,12 @@
         <div id="actions" class="actions"></div><button id="all-off" class="stop" disabled>全リレーOFF</button>
         <p class="note">全リレーOFFはエンジン停止とは別の操作です。表示するON/OFFは送信結果からの推定です。</p>
         <p id="setup-note" class="note">初期設定ではアラームと全OFFのみ有効です。</p>
+      </section>
+      <section class="panel" id="camera-panel"><h2>カメラ監視</h2>
+        <p>静止画の定期更新です。映像だけで始動の安全を判断しないでください。</p>
+        <div class="camera-controls"><button data-camera="off">監視OFF</button><button data-camera="normal">通常（5秒）</button><button data-camera="detail">詳細（最大1fps・120秒）</button><button id="camera-refresh">画像更新</button></div>
+        <p id="camera-status" role="status">監視OFF</p><p>最終撮影: <span id="camera-time">—</span></p>
+        <img id="camera-image" hidden alt="最新のカメラ静止画（クリックで拡大）"><p class="note">OFFはこの画面の閲覧を終了します。他の閲覧者がいる間は監視が続きます。</p>
       </section>
       <section class="panel"><h2>最近の操作</h2><p id="empty-history">まだ操作はありません</p><ol id="history"></ol></section>
     </div>

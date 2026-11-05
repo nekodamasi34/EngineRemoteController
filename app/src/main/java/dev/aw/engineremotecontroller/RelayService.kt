@@ -28,6 +28,8 @@ class RelayService : Service() {
     private val listeners = CopyOnWriteArrayList<(RelayUpdate) -> Unit>()
     private val remoteLock = Any()
     private val mainHandler = Handler(Looper.getMainLooper())
+    var cameraManager: CameraManager? = null
+        private set
     private var networkWorker: ScheduledThreadPoolExecutor? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var remoteSession = ""
@@ -132,6 +134,7 @@ class RelayService : Service() {
                 setExecuteExistingDelayedTasksAfterShutdownPolicy(false)
             }
             networkWorker = worker
+            cameraManager = runCatching { CameraManager(CameraSettings(this), CameraUploadClient(config)) }.getOrNull()
             val client = RemoteApiClient(config)
             val session = remoteSession
             worker.execute { pollOnce(client, config, session, worker) }
@@ -157,6 +160,7 @@ class RelayService : Service() {
             val sentAt = SystemClock.elapsedRealtime()
             val reply = client.poll(payload)
             val elapsed = SystemClock.elapsedRealtime() - sentAt
+            runCatching { cameraManager?.update(reply.optJSONObject("camera"), reply.getLong("serverTime"), elapsed) }
             synchronized(remoteLock) {
                 if (!remoteRunning || session != remoteSession) return
                 reports.removeAll(pending.toSet())
@@ -211,6 +215,8 @@ class RelayService : Service() {
         synchronized(remoteLock) {
             remoteRunning = false
             remoteSession = ""
+            cameraManager?.close()
+            cameraManager = null
             networkWorker?.shutdownNow()
             networkWorker = null
             wakeLock?.let { if (it.isHeld) it.release() }
@@ -225,6 +231,8 @@ class RelayService : Service() {
 
     override fun onDestroy() {
         destroyed = true
+        cameraManager?.close()
+        cameraManager = null
         synchronized(remoteLock) {
             remoteRunning = false
             remoteSession = ""

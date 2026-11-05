@@ -49,10 +49,12 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +62,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -929,10 +932,13 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun SettingsPane(modifier: Modifier = Modifier) {
+        var remoteTokenVisible by remember { mutableStateOf(false) }
+
         LazyColumn(
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item(key = "camera_settings") { CameraSettingsPane { relayService?.cameraManager } }
             item(key = "remote_settings") {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -940,7 +946,20 @@ class MainActivity : ComponentActivity() {
                         Text("接続タブでBluetooth機器を選び、公開したサイトURLと端末キーを設定してください。")
                         OutlinedTextField(value = remoteUrl, onValueChange = { remoteUrl = it }, label = { Text("サイトURL（https://…）") }, singleLine = true, enabled = !remoteRunning, modifier = Modifier.fillMaxWidth())
                         OutlinedTextField(value = remoteDeviceId, onValueChange = { remoteDeviceId = it }, label = { Text("端末ID") }, singleLine = true, enabled = !remoteRunning, modifier = Modifier.fillMaxWidth())
-                        OutlinedTextField(value = remoteToken, onValueChange = { remoteToken = it }, label = { Text("端末キー") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), enabled = !remoteRunning, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(
+                            value = remoteToken,
+                            onValueChange = { remoteToken = it },
+                            label = { Text("端末キー") },
+                            singleLine = true,
+                            visualTransformation = if (remoteTokenVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            trailingIcon = {
+                                TextButton(onClick = { remoteTokenVisible = !remoteTokenVisible }) {
+                                    Text(if (remoteTokenVisible) "非表示" else "表示")
+                                }
+                            },
+                            enabled = !remoteRunning,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                         Text(remoteStatus, style = MaterialTheme.typography.bodySmall)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = { startRemoteReceiver() }, enabled = !remoteRunning && !engineActionRunning) { Text("保存して待受開始") }

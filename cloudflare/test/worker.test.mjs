@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/worker.mjs';
+import { demand } from '../src/camera.mjs';
 
 class D1 {
-  constructor() { this.sqlite = new DatabaseSync(':memory:'); this.sqlite.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url),'utf8')); }
+  constructor() { this.sqlite = new DatabaseSync(':memory:'); this.sqlite.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url),'utf8')); this.sqlite.exec(readFileSync(new URL('../migrations/0002_camera.sql', import.meta.url),'utf8')); }
   prepare(sql) {
     const s = this.sqlite.prepare(sql);
     return { bind: (...args) => ({
@@ -118,4 +119,64 @@ test('can claim all-off during a timed action',async()=>{
   assert.equal((await command('all_off','off',0)).status,201);
   const p=await (await poll([], {...ready,ready:false,busy:true})).json();
   assert.equal(p.command.action,'all_off');
+});
+
+function bucket() {
+  let saved;
+  return { writes:0, async put(key,bytes,options) { this.writes++; saved={bytes,options}; },
+    async get() { return saved ? {customMetadata:saved.options.customMetadata,body:new Blob([saved.bytes]).stream()} : null; } };
+}
+const watch=(mode='normal',viewerId='viewer-1234567890')=>call('/api/camera/watch',{viewerId,mode});
+function frame(bytes=new Uint8Array([255,216,255,217]),headers={}) {
+  return worker.fetch(new Request('https://remote.example/api/device/camera/frame',{method:'POST',headers:{'Content-Type':'image/jpeg',Authorization:'Bearer '+env.DEVICE_TOKEN,'X-Captured-At':String(Date.now()),...headers},body:bytes}),env);
+}
+test('camera OFF rejects uploads; no camera dependency for relay polling',async()=>{
+  env.CAMERA_BUCKET=bucket(); assert.equal((await frame()).status,409);
+  assert.equal((await (await poll()).json()).camera.mode,'off');
+  env.DB.sqlite.exec('DROP TABLE camera_viewers');
+  assert.equal((await poll()).status,200);
+});
+test('camera uses session auth, device auth and Origin checks',async()=>{
+  env.CAMERA_BUCKET=bucket();
+  for(const p of ['/api/camera/frame','/api/camera/status']) assert.equal((await call(p,undefined,false)).status,401);
+  assert.equal((await call('/api/camera/watch',{viewerId:'viewer-1234567890',mode:'normal'},true,{Origin:'https://evil.test'})).status,403);
+  assert.equal((await frame(undefined,{Authorization:'Bearer bad'})).status,401);
+});
+test('multiple viewers stop only after last lease expires or releases',async()=>{
+  env.CAMERA_BUCKET=bucket(); await watch(); await watch('normal','viewer-abcdefghij'); await watch('off');
+  assert.equal((await demand(env)).mode,'normal');
+  env.DB.sqlite.exec('UPDATE camera_viewers SET expires_at=0');
+  assert.equal((await demand(env)).mode,'off');assert.equal((await frame()).status,409);
+});
+test('detail lease cannot be extended by heartbeats, downgrades at 120 seconds',async()=>{
+  env.CAMERA_BUCKET=bucket(); await watch('detail');
+  const deadline=()=>env.DB.sqlite.prepare('SELECT detail_until FROM camera_viewers').get().detail_until;
+  const first={detailUntil:deadline()};await watch('detail');assert.equal(deadline(),first.detailUntil);
+  // A live lease at the detail deadline becomes normal.
+  env.DB.sqlite.exec(`UPDATE camera_viewers SET expires_at=${first.detailUntil+20000}`);
+  assert.equal((await demand(env,first.detailUntil)).mode,'normal');
+});
+test('rejects invalid MIME, oversized streamed requests, invalid JPEG and stale capture',async()=>{
+  env.CAMERA_BUCKET=bucket();await watch();
+  assert.equal((await frame(undefined,{'Content-Type':'text/plain'})).status,415);
+  assert.equal((await frame(new Uint8Array(131073))).status,413);
+  assert.equal((await frame(new Uint8Array([0,1,2,3]))).status,415);
+  assert.equal((await frame(undefined,{'X-Captured-At':'1'})).status,400);
+  assert.equal(env.CAMERA_BUCKET.writes,0);
+});
+test('normal and detail frame throttling, authenticated no-cache delivery and stale refusal',async()=>{
+  env.CAMERA_BUCKET=bucket();await watch();assert.equal((await frame()).status,200);
+  assert.equal((await frame()).status,429);
+  env.DB.sqlite.exec(`UPDATE camera_frames SET accepted_at=${Date.now()-2000}`);
+  assert.equal((await frame()).status,429);
+  await watch('detail');assert.equal((await frame()).status,200);
+  assert.equal((await frame()).status,429);
+  const response=await call('/api/camera/frame');assert.equal(response.status,200);assert.match(response.headers.get('cache-control'),/no-store/);
+  env.CAMERA_BUCKET.get=async()=>({customMetadata:{capturedAt:'1'},body:new Blob(['old']).stream()});
+  assert.equal((await call('/api/camera/frame')).status,404);
+  assert.equal((await (await call('/api/camera/status')).json()).online,false);
+});
+test('concurrent uploads reserve a single frame slot',async()=>{
+  env.CAMERA_BUCKET=bucket();await watch('detail');
+  const replies=await Promise.all([frame(),frame()]);assert.deepEqual(replies.map(r=>r.status).sort(),[200,429]);assert.equal(env.CAMERA_BUCKET.writes,1);
 });

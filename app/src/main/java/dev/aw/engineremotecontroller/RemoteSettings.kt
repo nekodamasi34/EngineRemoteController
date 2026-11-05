@@ -22,9 +22,8 @@ data class RemoteConfig(val baseUrl: String, val deviceId: String, val token: St
 }
 
 /** Device credential is encrypted with an Android Keystore key and excluded from backups. */
-class RemoteSettings(context: Context) {
-    private val preferences = context.getSharedPreferences("remote_settings", Context.MODE_PRIVATE)
-    private val alias = "engine_remote_device_token"
+class RemoteSettings(context: Context, preferenceName: String = "remote_settings", private val alias: String = "engine_remote_device_token") {
+    private val preferences = context.getSharedPreferences(preferenceName, Context.MODE_PRIVATE)
 
     fun load(): RemoteConfig {
         val token = runCatching {
@@ -39,9 +38,13 @@ class RemoteSettings(context: Context) {
 
     fun save(config: RemoteConfig) {
         config.validate()
+        saveEncrypted(config.token, config)
+    }
+
+    fun saveEncrypted(value: String, config: RemoteConfig = RemoteConfig("", "", "", "")) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key())
-        val encrypted = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(cipher.doFinal(config.token.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
+        val encrypted = Base64.encodeToString(cipher.iv, Base64.NO_WRAP) + ":" + Base64.encodeToString(cipher.doFinal(value.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
         check(preferences.edit().putString("url", config.baseUrl.trimEnd('/')).putString("device", config.deviceId)
             .putString("bluetooth", config.bluetoothAddress).putString("token", encrypted).commit()) { "設定を保存できませんでした" }
     }

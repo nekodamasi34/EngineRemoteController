@@ -1,3 +1,4 @@
+import { demand, camera } from './camera.mjs';
 const encoder = new TextEncoder();
 const ONLINE_MS = 20_000;
 const COMMAND_TTL_MS = 15_000;
@@ -139,7 +140,7 @@ async function poll(request, env) {
   const c = results.at(-1).results?.[0];
   return json({ serverTime: now, pollAfterMs: 5000, command: c ? {
     id: c.id, action: c.action, durationMs: c.duration_ms, expiresAt: c.expires_at, claimId: c.claim_id
-  } : null });
+  } : null, camera: await demand(env).catch(() => ({mode:"off",expiresAt:0,detailUntil:0})) });
 }
 
 export default {
@@ -159,7 +160,14 @@ export default {
         return json({ ok: true }, 200, { 'Set-Cookie': cookie });
       }
       if (url.pathname === '/api/device/poll' && request.method === 'POST') { await device(request, env); return await poll(request, env); }
+      if (url.pathname === '/api/device/camera/frame' && request.method === 'POST') {
+        await device(request, env);
+        try { return json(await camera(request,env,url.pathname,body)); } catch(e) { if(e.status) return json({error:e.message},e.status); throw e; }
+      }
       await operator(request, env);
+      if ((url.pathname === '/api/camera/watch' && request.method === 'POST') || (['/api/camera/frame','/api/camera/status'].includes(url.pathname) && request.method === 'GET')) {
+        try { const r=await camera(request,env,url.pathname,body); return r instanceof Response ? r : json(r); } catch(e) { if(e.status) return json({error:e.message},e.status); throw e; }
+      }
       if (url.pathname === '/api/logout' && request.method === 'POST') return json({ ok: true }, 200, { 'Set-Cookie': `${COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=0` });
       if (url.pathname === '/api/status' && request.method === 'GET') return await status(env);
       if (url.pathname === '/api/commands' && request.method === 'POST') return await createCommand(request, env);
