@@ -147,6 +147,10 @@ class AiMonitorService : Service() {
             try {
                 val transform = model.prepare(source)
                 if (!active()) return
+                if (camera != cameraSettings.load()) {
+                    scheduleTick(interval)
+                    return
+                }
                 val beforeInferenceThermal = thermal()
                 val stopped = rate.thermalPauseMs(beforeInferenceThermal)
                 if (stopped != null) {
@@ -177,7 +181,7 @@ class AiMonitorService : Service() {
                 ) }
                 for (hit in tracker.sample(result.detections, frame.elapsedAt, config)) {
                     if (!active()) break
-                    record(frame, source, hit, config)
+                    record(frame, source, hit, config, camera)
                 }
                 scheduleTick(heatDelay ?: rate.nextDelay(inferenceStart, now(), next))
             } finally {
@@ -192,9 +196,11 @@ class AiMonitorService : Service() {
         }
     }
 
-    private fun record(frame: CameraSnapshot, source: android.graphics.Bitmap, hit: Detection, config: AiConfig) {
+    private fun record(
+        frame: CameraSnapshot, source: android.graphics.Bitmap, hit: Detection, config: AiConfig, camera: CameraConfig
+    ) {
         val jpeg = if (config.saveImage) runCatching { source.eventJpeg() }.getOrNull() else null
-        if (!active() || config != settings.load()) return
+        if (!active() || config != settings.load() || camera != cameraSettings.load()) return
         val event = AiEvent(UUID.randomUUID().toString(), frame.capturedAt, hit, jpeg)
         val route = remoteSettings.load().eventRoute()
         val saved = runCatching { events.store(event, route) }.isSuccess

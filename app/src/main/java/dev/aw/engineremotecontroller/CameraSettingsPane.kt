@@ -1,5 +1,6 @@
 package dev.aw.engineremotecontroller
 
+import android.graphics.BitmapFactory
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -19,10 +20,15 @@ fun CameraSettingsPane(manager: () -> CameraManager?) {
     val scope=rememberCoroutineScope()
     var config by remember { mutableStateOf(settings.load()) }
     var port by remember { mutableStateOf(config.port.toString()) }
-    var message by remember { mutableStateOf("HTTP許可IPはビルド時設定も必要です。READMEを参照してください。") }
+    var message by remember { mutableStateOf("接続テストは保存前の入力でも実行できます。") }
     var testing by remember { mutableStateOf(false) }
     var preview by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var status by remember { mutableStateOf("監視OFF") }
+    fun inputConfig(): CameraConfig {
+        val value = port.trim().toIntOrNull()
+        if (value == null || value !in 1..65535) throw CameraInputException("ONVIFポートは1〜65535で入力してください")
+        return config.copy(host = config.host.trim(), port = value)
+    }
     LaunchedEffect(Unit) {
         while(true) {
             val m=manager()
@@ -39,13 +45,40 @@ fun CameraSettingsPane(manager: () -> CameraManager?) {
             OutlinedTextField(value=config.username,onValueChange={config=config.copy(username=it)},label={Text("ユーザー名")},singleLine=true,modifier=Modifier.fillMaxWidth())
             OutlinedTextField(value=config.password,onValueChange={config=config.copy(password=it)},label={Text("パスワード")},visualTransformation=PasswordVisualTransformation(),singleLine=true,modifier=Modifier.fillMaxWidth())
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                Button(onClick={runCatching { val c=config.copy(port=port.toInt());settings.save(c);config=c;message="保存しました" }.onFailure {message="設定を確認してください"}}) {Text("保存")}
+                Button(onClick = {
+                    runCatching {
+                        val edited = inputConfig()
+                        settings.save(edited)
+                        config = edited
+                        message = "保存しました"
+                    }.onFailure {
+                        message = if (it is CameraInputException) it.message ?: "入力を確認してください"
+                            else "カメラ設定を保存できませんでした"
+                    }
+                }) { Text("保存") }
                 OutlinedButton(enabled=!testing,onClick={scope.launch {
-                    testing=true;message="GetSnapshotUri・JPEG取得テスト中"
-                    val result=withContext(Dispatchers.IO) {runCatching {val c=config.copy(port=port.toInt());c.validate();OnvifSnapshotClient(c).capture()}}
-                    result.onSuccess {preview=android.graphics.BitmapFactory.decodeByteArray(it,0,it.size);message="ローカル取得成功（クラウド送信なし）"}
-                        .onFailure {message="取得失敗：IP・HTTP許可設定・ポート・認証・時刻・GetSnapshotUri対応を確認"}
-                    testing=false
+                    testing = true
+                    preview = null
+                    message = "GetSnapshotUri・JPEG取得テスト中"
+                    val result = runCatching {
+                        val edited = inputConfig()
+                        withContext(Dispatchers.IO) {
+                            val jpeg = OnvifSnapshotClient(edited).capture()
+                            BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+                                ?: throw CameraConnectionException("JPEGをデコードできません")
+                        }
+                    }
+                    result.onSuccess {
+                        preview = it
+                        message = "ローカル取得成功（クラウド送信なし）"
+                    }.onFailure {
+                        if (it is kotlinx.coroutines.CancellationException) throw it
+                        message = when (it) {
+                            is CameraInputException, is CameraConnectionException -> it.message ?: "接続情報を確認してください"
+                            else -> "カメラへの接続テストに失敗しました"
+                        }
+                    }
+                    testing = false
                 }}) {Text("接続テスト")}
             }
             Text(message); Text(status,style=MaterialTheme.typography.bodySmall)

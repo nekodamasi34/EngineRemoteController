@@ -9,9 +9,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -25,6 +30,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -33,6 +39,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
@@ -42,13 +49,13 @@ import java.util.Date
 import java.util.Locale
 
 @Composable
-internal fun AiMonitorPane() {
+internal fun AiMonitorPane(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val settings = remember { AiSettings(context) }
     val status by AiMonitorService.status.collectAsState()
     var config by remember { mutableStateOf(settings.load()) }
     var savedEvent by remember { mutableStateOf<AiEvent?>(null) }
-    var editing by remember { mutableStateOf(false) }
+    var editing by rememberSaveable { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     fun start() {
@@ -66,9 +73,11 @@ internal fun AiMonitorPane() {
         savedEvent = withContext(Dispatchers.IO) { AiEventStore(context).latest() }
     }
     val event = status.latest ?: savedEvent
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("AI監視", style = MaterialTheme.typography.titleMedium)
+    Card(modifier) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             AiSwitch("AI監視を有効にする", config.enabled) { enabled ->
                 config = config.copy(enabled = enabled)
                 settings.save(config)
@@ -82,8 +91,9 @@ internal fun AiMonitorPane() {
             Text(if (config.enabled) status.message else "監視OFF")
             if (config.enabled && !status.running) TextButton(onClick = { start() }) { Text("監視を開始") }
             Text("カメラ ${if (config.enabled) status.camera else "AI取得OFF"}")
+            Text("カメラ接続先は「設定」タブで変更できます。", style = MaterialTheme.typography.bodySmall)
             Text("認識間隔 ${status.interval?.let { "${it / 1000}秒" } ?: "—"}")
-            Text("熱状態 ${thermalName(status.thermal)}${if (status.powerSave) " / 端末の省電力ON" else ""}")
+            Text("熱状態 ${thermalName(status.thermal)} / 端末の省電力 ${if (status.powerSave) "ON" else "OFF"}")
             status.timings?.let { timing ->
                 Text("最新 ${timing.inferenceMs}ms / 平均 ${status.average?.toInt() ?: "—"}ms")
                 val ratio = status.interval?.let { interval -> status.average?.div(interval)?.times(100) }
@@ -91,8 +101,8 @@ internal fun AiMonitorPane() {
                 Text("画像取得 ${timing.captureMs}ms / 前処理 ${timing.preprocessMs}ms / 合計 ${timing.totalMs}ms",
                     style = MaterialTheme.typography.bodySmall)
             }
-            if (status.failures > 0) Text("連続失敗 ${status.failures}回")
-            if (status.delivery.isNotEmpty()) Text(status.delivery)
+            Text("連続失敗 ${status.failures}回")
+            Text("イベント送信 ${status.delivery.ifEmpty { "—" }}")
             Text("最終検知 ${event?.let { DateFormat.getDateTimeInstance().format(Date(it.capturedAt)) } ?: "—"}")
             event?.let {
                 Text("${it.detection.target.name.lowercase()} ${(it.detection.confidence * 100).toInt()}%")
@@ -101,7 +111,7 @@ internal fun AiMonitorPane() {
             if (error.isNotEmpty()) Text(error, color = MaterialTheme.colorScheme.error)
             TextButton(onClick = { editing = !editing }) { Text(if (editing) "設定を閉じる" else "AI監視設定") }
             if (editing) AiOptions(config) { options ->
-                config = options.copy(enabled = config.enabled)
+                config = options.copy(enabled = settings.load().enabled)
                 settings.save(config)
                 if (config.enabled) allowNotifications(config)
                 if (!config.saveImage) savedEvent = savedEvent?.copy(jpeg = null)
@@ -111,49 +121,58 @@ internal fun AiMonitorPane() {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AiOptions(initial: AiConfig, save: (AiConfig) -> Unit) {
-    var draft by remember { mutableStateOf(initial) }
-    var seconds by remember { mutableStateOf(initial.manualSeconds.toString()) }
-    var threshold by remember { mutableStateOf(initial.threshold.toString()) }
-    var window by remember { mutableStateOf(initial.window.toString()) }
-    var required by remember { mutableStateOf(initial.required.toString()) }
-    var suppression by remember { mutableStateOf(initial.suppressionSeconds.toString()) }
-    var invalid by remember { mutableStateOf(false) }
-    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf(AiMode.AUTO to "自動（推奨）", AiMode.ECONOMY to "省電力", AiMode.MANUAL to "手動").forEach { (mode, label) ->
-            FilterChip(selected = draft.mode == mode, onClick = { draft = draft.copy(mode = mode) }, label = { Text(label) })
+    var mode by rememberSaveable { mutableStateOf(initial.mode) }
+    var targets by rememberSaveable { mutableStateOf(ArrayList(initial.targets)) }
+    var saveImage by rememberSaveable { mutableStateOf(initial.saveImage) }
+    var notify by rememberSaveable { mutableStateOf(initial.notify) }
+    var seconds by rememberSaveable { mutableStateOf(initial.manualSeconds.toString()) }
+    var threshold by rememberSaveable { mutableStateOf(initial.threshold.toString()) }
+    var window by rememberSaveable { mutableStateOf(initial.window.toString()) }
+    var required by rememberSaveable { mutableStateOf(initial.required.toString()) }
+    var suppression by rememberSaveable { mutableStateOf(initial.suppressionSeconds.toString()) }
+    var invalid by rememberSaveable { mutableStateOf(false) }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(AiMode.AUTO to "自動（推奨）", AiMode.ECONOMY to "省電力", AiMode.MANUAL to "手動").forEach { (option, label) ->
+            FilterChip(selected = mode == option, onClick = { mode = option }, label = { Text(label) })
         }
     }
-    if (draft.mode == AiMode.MANUAL) AiField("認識間隔（1〜10秒）", seconds) { seconds = it }
+    if (mode == AiMode.MANUAL) AiField("認識間隔（1〜10秒）", seconds) { seconds = it }
     DetectionClass.values().forEach { target ->
-        AiSwitch(target.name.lowercase(), target in draft.targets) {
-            draft = draft.copy(targets = if (it) draft.targets + target else draft.targets - target)
+        AiSwitch(target.name.lowercase(), target in targets) {
+            targets = ArrayList(if (it) targets + target else targets - target)
         }
     }
     AiField("信頼度しきい値（0.01〜1.00）", threshold) { threshold = it }
     AiField("判定対象の直近推論回数（1〜10）", window) { window = it }
     AiField("確定に必要な検出回数", required) { required = it }
     AiField("同じ対象の通知抑制時間（0〜3600秒）", suppression) { suppression = it }
-    AiSwitch("検知画像を保存する", draft.saveImage) { draft = draft.copy(saveImage = it) }
-    AiSwitch("Android端末に検知通知を出す", draft.notify) { draft = draft.copy(notify = it) }
+    AiSwitch("検知画像を保存する", saveImage) { saveImage = it }
+    AiSwitch("Android端末に検知通知を出す", notify) { notify = it }
     if (invalid) Text("入力範囲と検出回数を確認してください", color = MaterialTheme.colorScheme.error)
     Button(onClick = {
         val t = threshold.toFloatOrNull()
         val n = window.toIntOrNull()
         val hits = required.toIntOrNull()
         val hold = suppression.toIntOrNull()
-        val manual = if (draft.mode == AiMode.MANUAL) seconds.toIntOrNull() else draft.manualSeconds
+        val manual = if (mode == AiMode.MANUAL) seconds.toIntOrNull() else initial.manualSeconds
         if (t == null || t !in 0.01f..1f || n == null || n !in 1..10 || hits == null || hits !in 1..n ||
             hold == null || hold !in 0..3600 || manual == null || manual !in 1..10) invalid = true
-        else save(draft.copy(manualSeconds = manual, threshold = t, window = n, required = hits, suppressionSeconds = hold))
+        else save(initial.copy(mode = mode, targets = targets.toSet(), saveImage = saveImage, notify = notify,
+            manualSeconds = manual, threshold = t, window = n, required = hits, suppressionSeconds = hold))
     }) { Text("AI監視設定を保存") }
 }
 
 @Composable
 private fun AiSwitch(label: String, value: Boolean, change: (Boolean) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        Switch(checked = value, onCheckedChange = change)
+    Row(
+        Modifier.fillMaxWidth().toggleable(value = value, role = Role.Switch, onValueChange = change),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Switch(checked = value, onCheckedChange = null)
         Text(label)
     }
 }

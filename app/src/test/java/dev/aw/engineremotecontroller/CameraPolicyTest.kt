@@ -31,9 +31,32 @@ class CameraPolicyTest {
         assertEquals("off",detail.modeAt(200000))
     }
     @Test fun onlyLocalCameraAddressesAccepted() {
-        CameraConfig(true,"192.168.1.100",80,"camera","secret").validate()
-        for(host in listOf("8.8.8.8","127.0.0.1","192.168.1.999","camera.example","10.0.0.1/path")) {
-            assertTrue(runCatching {CameraConfig(true,host,80,"user","pass").validate()}.isFailure)
+        val camera = CameraConfig(enabled = true, port = 8080, username = "camera")
+        for (host in listOf("10.0.2.2", "192.168.1.100", "172.16.0.1", "172.31.255.254")) {
+            camera.copy(host = host).validate()
+        }
+        for (host in listOf(
+            "8.8.8.8", "127.0.0.1", "169.254.1.2", "224.0.0.1", "100.64.0.1",
+            "172.15.0.1", "172.32.0.1", "192.168.1.999", "camera.example", "10.0.0.1/path",
+            "010.0.0.1", "10.0.1", "10.0.0.1 ", "::ffff:10.0.0.1"
+        )) {
+            assertThrows(host, CameraInputException::class.java) { camera.copy(host = host).validate() }
+        }
+    }
+
+    @Test fun onvifUrlsMustUseTheConfiguredLiteralWithoutUserInfo() {
+        val camera = CameraConfig(host = "172.21.0.4", port = 8080, username = "camera")
+        assertEquals(8080, camera.cameraUrl("http://172.21.0.4:8080/onvif/media").port)
+        assertEquals("https://172.21.0.4:8443/snapshot?profile=2",
+            camera.cameraUrl("https://172.21.0.4:8443/snapshot?profile=2").toString())
+        for (url in listOf(
+            "http://172.21.0.5/snapshot", "http://8.8.8.8/snapshot", "http://localhost/snapshot",
+            "http://user:password@172.21.0.4/snapshot", "http://172.21.0.4@8.8.8.8/snapshot",
+            "http://172.21.0.4:0/snapshot", "http://172.21.0.4:65536/snapshot", "http://172.21.0.4:/snapshot",
+            "http://172.21.0.4/snapshot#fragment", "http://172.21.0.4\\@example.com/snapshot",
+            "http://172.21.000.4/snapshot", "file://172.21.0.4/snapshot", "/snapshot"
+        )) {
+            assertThrows(url, CameraConnectionException::class.java) { camera.cameraUrl(url) }
         }
     }
 }

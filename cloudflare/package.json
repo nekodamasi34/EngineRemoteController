@@ -5,7 +5,7 @@
   "scripts": {
     "setup:local": "node scripts/setup-local.mjs",
     "dev": "wrangler dev",
-    "test": "node --test test/worker.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "test:smoke": "node test/smoke.mjs",
     "deploy": "wrangler deploy",
     "db:local": "wrangler d1 migrations apply engine-remote --local",

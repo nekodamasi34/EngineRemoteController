@@ -24,9 +24,18 @@ internal class CameraSnapshot(
     }
 
     companion object {
-        private var previous: CameraConfig? = null
-        private var client: OnvifSnapshotClient? = null
-        private var latest: CameraSnapshot? = null
+        private class Session {
+            var config: CameraConfig? = null
+            var client: OnvifSnapshotClient? = null
+            var latest: CameraSnapshot? = null
+        }
+
+        @Volatile private var session = Session()
+
+        fun invalidate() {
+            // Replace the cache without waiting for in-flight camera I/O on the settings screen.
+            session = Session()
+        }
 
         // The lock covers ONVIF I/O only. Consumers decode, infer and upload outside the lock.
         @Synchronized
@@ -35,16 +44,21 @@ internal class CameraSnapshot(
             active: () -> Boolean = { true },
             fetch: (() -> CameraSnapshot)? = null
         ): CameraSnapshot? {
-            if (!active()) return null
-            latest?.takeIf { previous == config && SystemClock.elapsedRealtime() - it.elapsedAt < 900 }
+            val current = session
+            val stillActive = { current === session && active() }
+            if (!stillActive()) return null
+            current.latest?.takeIf { current.config == config && SystemClock.elapsedRealtime() - it.elapsedAt < 900 }
                 ?.let { return it }
-            if (previous != config || client == null) {
-                previous = config
-                client = OnvifSnapshotClient(config)
+            if (current.config != config || current.client == null) {
+                current.config = config
+                current.client = OnvifSnapshotClient(config)
             }
             // Only one bounded compressed snapshot is retained. Stale snapshots cannot be reused.
-            latest = null
-            return (fetch?.invoke() ?: checkNotNull(client).rawSnapshot(active)).also { latest = it }
+            current.latest = null
+            val frame = fetch?.invoke() ?: checkNotNull(current.client).rawSnapshot(stillActive)
+            if (!stillActive()) return null
+            current.latest = frame
+            return frame
         }
     }
 }
