@@ -43,6 +43,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -126,6 +127,7 @@ val engineActions = listOf(
 enum class EnginePane(val title: String) {
     CONNECTION("接続"),
     OPERATION("操作"),
+    AI_MONITOR("AI監視"),
     SETTINGS("設定"),
     LOG("ログ")
 }
@@ -217,6 +219,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        savedInstanceState?.getString("currentPane")?.let { savedPane ->
+            EnginePane.entries.find { it.name == savedPane }?.let { currentPane = it }
+        }
 
         relayManager = BluetoothRelayManager(applicationContext)
         val saved = RemoteSettings(this).load()
@@ -243,6 +248,11 @@ class MainActivity : ComponentActivity() {
         if (AiSettings(this).load().enabled && !AiMonitorService.status.value.running) {
             runCatching { ContextCompat.startForegroundService(this, Intent(this, AiMonitorService::class.java)) }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putString("currentPane", currentPane.name)
     }
 
     override fun onDestroy() {
@@ -410,6 +420,7 @@ class MainActivity : ComponentActivity() {
     private fun RelayApp() {
         val selectedDevice = deviceList.firstOrNull { it.address == selectedAddress }
         val latestLogs = logs.takeLast(20).reversed()
+        val paneState = rememberSaveableStateHolder()
 
         Scaffold(
             topBar = {
@@ -451,6 +462,10 @@ class MainActivity : ComponentActivity() {
                             .weight(1f)
                             .fillMaxWidth()
                     )
+
+                    EnginePane.AI_MONITOR -> paneState.SaveableStateProvider(EnginePane.AI_MONITOR.name) {
+                        AiMonitorPane(modifier = Modifier.weight(1f).fillMaxWidth())
+                    }
 
                     EnginePane.SETTINGS -> SettingsPane(
                         modifier = Modifier
@@ -946,7 +961,6 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item(key = "camera_settings") { CameraSettingsPane { relayService?.cameraManager } }
-            item(key = "ai_monitor") { AiMonitorPane() }
             item(key = "remote_settings") {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -1072,7 +1086,7 @@ private fun PaneSwitcher(
                 selected = currentPane == pane,
                 onClick = { onPaneSelected(pane) },
                 icon = {},
-                label = { Text(pane.title) }
+                label = { Text(pane.title, maxLines = 1) }
             )
         }
     }
