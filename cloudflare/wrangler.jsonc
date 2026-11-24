@@ -10,8 +10,10 @@
   },
   "vars": {
     "DEVICE_ID": "engine-1",
+    "AI_EVENT_RETENTION_DAYS": "30",
     "ALLOWED_ACTIONS": "alarm,all_off,ignition,engine_stop,choke_a,choke_b"
   },
+  "triggers": { "crons": ["*/15 * * * *"] },
   "r2_buckets": [{ "binding": "CAMERA_BUCKET", "bucket_name": "engine-remote-camera" }],
   "d1_databases": [{
     "binding": "DB",

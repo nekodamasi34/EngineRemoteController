@@ -12,8 +12,6 @@ class CameraManager(private val settings: CameraSettings, private val upload: Ca
     @Volatile private var closed=false
     @Volatile var status="監視OFF"; private set
     @Volatile var lastUpload=0L; private set
-    private var client: OnvifSnapshotClient?=null
-    private var previous: CameraConfig?=null
     private val worker=ScheduledThreadPoolExecutor(1).apply { removeOnCancelPolicy=true; setExecuteExistingDelayedTasksAfterShutdownPolicy(false) }
     init { worker.execute { tick() } }
     fun update(raw: JSONObject?, serverTime: Long, roundTrip: Long) {
@@ -28,17 +26,22 @@ class CameraManager(private val settings: CameraSettings, private val upload: Ca
         try {
             val current=lease; val now=SystemClock.elapsedRealtime()
             val config=settings.load()
-            if(current.modeAt(now)=="off" || !config.enabled) { status="監視OFF"; client=null }
+            if(current.modeAt(now)=="off" || !config.enabled) { status="監視OFF" }
             else {
                 delay=current.interval(now)
-                if(config!=previous || client==null) { client=OnvifSnapshotClient(config);previous=config }
-                val capturedAt=SystemClock.elapsedRealtime()+serverOffset
+                val active = { !closed && lease.modeAt(SystemClock.elapsedRealtime())!="off" && settings.load()==config }
+                var capturedAt = 0L
                 val sent=CameraFrameGate.transfer(
-                    active={ !closed && lease.modeAt(SystemClock.elapsedRealtime())!="off" && settings.load()==config },
-                    capture={client!!.capture()}, upload={upload.upload(it,capturedAt)})
+                    active=active,
+                    capture={
+                        CameraSnapshot.captureIfActive(config, active)?.let {
+                            capturedAt = it.elapsedAt + serverOffset
+                            it.webJpeg()
+                        }
+                    }, upload={upload.upload(it,capturedAt)})
                 if(sent) { lastUpload=System.currentTimeMillis();status="カメラ接続OK / ${current.modeAt(now)}" }
             }
-        } catch(e: Exception) { status="カメラ取得・送信失敗（IP・認証・ONVIF対応を確認）"; client=null; delay=10000 }
+        } catch(e: Exception) { status="カメラ取得・送信失敗（IP・認証・ONVIF対応を確認）"; delay=10000 }
         if(!closed) runCatching { worker.schedule({tick()},delay,TimeUnit.MILLISECONDS) }
     }
     override fun close() { closed=true;lease=CameraLease();worker.shutdownNow();status="監視OFF" }

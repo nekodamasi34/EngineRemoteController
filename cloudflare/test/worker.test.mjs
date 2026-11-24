@@ -4,9 +4,15 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import worker from '../src/worker.mjs';
 import { demand } from '../src/camera.mjs';
+import { cleanupAiEvents } from '../src/ai-events.mjs';
 
 class D1 {
-  constructor() { this.sqlite = new DatabaseSync(':memory:'); this.sqlite.exec(readFileSync(new URL('../migrations/0001_initial.sql', import.meta.url),'utf8')); this.sqlite.exec(readFileSync(new URL('../migrations/0002_camera.sql', import.meta.url),'utf8')); }
+  constructor() {
+    this.sqlite = new DatabaseSync(':memory:');
+    for (const name of ['0001_initial', '0002_camera', '0003_ai_events']) {
+      this.sqlite.exec(readFileSync(new URL(`../migrations/${name}.sql`, import.meta.url), 'utf8'));
+    }
+  }
   prepare(sql) {
     const s = this.sqlite.prepare(sql);
     return { bind: (...args) => ({
@@ -179,4 +185,79 @@ test('normal and detail frame throttling, authenticated no-cache delivery and st
 test('concurrent uploads reserve a single frame slot',async()=>{
   env.CAMERA_BUCKET=bucket();await watch('detail');
   const replies=await Promise.all([frame(),frame()]);assert.deepEqual(replies.map(r=>r.status).sort(),[200,429]);assert.equal(env.CAMERA_BUCKET.writes,1);
+});
+const eventJpeg = new Uint8Array([255,216,4,255,217]);
+function aiEvent(overrides = {}) {
+  return {eventId:crypto.randomUUID(),deviceId:'engine-1',capturedAt:Date.now(),target:'animal',confidence:0.83,bbox:[0.1,0.2,0.7,0.8],...overrides};
+}
+function postEvent(event, bytes = eventJpeg, token = env.DEVICE_TOKEN) {
+  return worker.fetch(new Request('https://remote.example/api/device/ai/events',{
+    method:'POST',
+    headers:{Authorization:'Bearer '+token,'X-AI-Event':JSON.stringify(event),'Content-Type':bytes?'image/jpeg':'application/octet-stream'},
+    body:bytes
+  }),env);
+}
+function eventBucket() {
+  const images = new Map();
+  return env.CAMERA_BUCKET = {
+    images,
+    async put(key, value) { images.set(key, Uint8Array.from(value)); },
+    async get(key) { return images.has(key) ? {body:images.get(key)} : null; },
+    async delete(keys) { for (const key of [keys].flat()) images.delete(key); }
+  };
+}
+test('AI uses separate authentication, private images and idempotent history', async () => {
+  const bucket = eventBucket(), event = aiEvent();
+  const path = '/api/ai/events/' + event.eventId + '/image';
+  assert.equal((await postEvent(event,eventJpeg,env.OPERATOR_TOKEN)).status,401);
+  assert.equal((await call('/api/ai/events',undefined,false)).status,401);
+  assert.equal((await postEvent(event)).status,200);
+  assert.equal((await postEvent(event)).status,200);
+  assert.equal((await postEvent({...event,confidence:0.88})).status,409);
+  assert.deepEqual([...bucket.images.keys()],[`ai-events/engine-1/${event.eventId}.jpg`]);
+  assert.equal((await call(path,undefined,false)).status,401);
+  const image = await call(path);
+  assert.match(image.headers.get('cache-control'),/private, no-store/);
+  assert.deepEqual(new Uint8Array(await image.arrayBuffer()),eventJpeg);
+  assert.deepEqual((await (await call('/api/ai/events')).json()).events,[{...event,hasImage:true}]);
+});
+test('AI retries a pending R2 write and supports metadata-only history', async () => {
+  const event = aiEvent(), bucket = eventBucket(), put = bucket.put;
+  bucket.put = async () => { throw new Error('offline'); };
+  assert.equal((await postEvent(event)).status,500);
+  assert.equal((await (await call('/api/ai/events')).json()).events.length,0);
+  bucket.put = put;
+  assert.equal((await postEvent(event)).status,200);
+  const noImage = aiEvent();
+  assert.equal((await postEvent(noImage,null)).status,200);
+  assert.equal((await call('/api/ai/events/'+noImage.eventId+'/image')).status,404);
+  assert.equal(bucket.images.size,1);
+});
+test('competing AI uploads cannot alter the content reserved by the event ID', async () => {
+  const event = aiEvent(), bucket = eventBucket();
+  const alternate = new Uint8Array([255,216,9,255,217]);
+  const [first, second] = await Promise.all([postEvent(event,eventJpeg),postEvent(event,alternate)]);
+  assert.deepEqual([first.status,second.status].sort(),[200,409]);
+  assert.deepEqual([...bucket.images.values()],[first.status === 200 ? eventJpeg : alternate]);
+});
+test('AI validates metadata and image size and expires D1 and R2 together', async () => {
+  const bucket = eventBucket(), event = aiEvent();
+  env.AI_EVENT_RETENTION_DAYS = '1';
+  assert.equal((await postEvent({...event,deviceId:'other'})).status,400);
+  assert.equal((await postEvent({...event,bbox:[0.7,0.2,0.1,0.8]})).status,400);
+  assert.equal((await postEvent(event,new Uint8Array(131073))).status,413);
+  assert.equal((await postEvent(event)).status,200);
+  await cleanupAiEvents(env,event.capturedAt + 86400000);
+  assert.equal(bucket.images.size,0);
+  assert.equal((await (await call('/api/ai/events')).json()).events.length,0);
+});
+test('AI history pages deterministically when timestamps match', async () => {
+  const capturedAt = Date.now();
+  for (let i = 0; i < 21; i++) assert.equal((await postEvent(aiEvent({capturedAt}),null)).status,200);
+  const page = await (await call('/api/ai/events')).json();
+  const next = await (await call('/api/ai/events?'+new URLSearchParams(page.next))).json();
+  assert.equal(page.events.length,20);
+  assert.equal(next.events.length,1);
+  assert.equal(next.next,null);
+  assert.ok(next.events[0].eventId < page.events.at(-1).eventId);
 });

@@ -1,4 +1,5 @@
 import { demand, camera } from './camera.mjs';
+import { cleanupAiEvents, getAiImage, listAiEvents, saveAiEvent } from './ai-events.mjs';
 const encoder = new TextEncoder();
 const ONLINE_MS = 20_000;
 const COMMAND_TTL_MS = 15_000;
@@ -144,6 +145,9 @@ async function poll(request, env) {
 }
 
 export default {
+  async scheduled(controller, env, ctx) {
+    ctx.waitUntil(cleanupAiEvents(env, controller.scheduledTime));
+  },
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
@@ -160,11 +164,18 @@ export default {
         return json({ ok: true }, 200, { 'Set-Cookie': cookie });
       }
       if (url.pathname === '/api/device/poll' && request.method === 'POST') { await device(request, env); return await poll(request, env); }
+      if (url.pathname === '/api/device/ai/events' && request.method === 'POST') {
+        await device(request, env);
+        return json(await saveAiEvent(request, env, fail));
+      }
       if (url.pathname === '/api/device/camera/frame' && request.method === 'POST') {
         await device(request, env);
         try { return json(await camera(request,env,url.pathname,body)); } catch(e) { if(e.status) return json({error:e.message},e.status); throw e; }
       }
       await operator(request, env);
+      if (request.method === 'GET' && url.pathname === '/api/ai/events') return json(await listAiEvents(env, url, fail));
+      const image = /^\/api\/ai\/events\/([^/]+)\/image$/.exec(url.pathname);
+      if (request.method === 'GET' && image) return await getAiImage(env, image[1], fail);
       if ((url.pathname === '/api/camera/watch' && request.method === 'POST') || (['/api/camera/frame','/api/camera/status'].includes(url.pathname) && request.method === 'GET')) {
         try { const r=await camera(request,env,url.pathname,body); return r instanceof Response ? r : json(r); } catch(e) { if(e.status) return json({error:e.message},e.status); throw e; }
       }

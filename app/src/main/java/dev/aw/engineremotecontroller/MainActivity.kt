@@ -238,6 +238,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (AiSettings(this).load().enabled && !AiMonitorService.status.value.running) {
+            runCatching { ContextCompat.startForegroundService(this, Intent(this, AiMonitorService::class.java)) }
+        }
+    }
+
     override fun onDestroy() {
         activityClosing = true
         relayService?.removeListener(serviceListener)
@@ -939,6 +946,7 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             item(key = "camera_settings") { CameraSettingsPane { relayService?.cameraManager } }
+            item(key = "ai_monitor") { AiMonitorPane() }
             item(key = "remote_settings") {
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

@@ -8,9 +8,9 @@ data class CameraLease(val mode: String = "off", val expiry: Long = 0, val detai
 
 /** Recheck after capture so expiration, OFF or a settings change drops the frame. */
 object CameraFrameGate {
-    fun transfer(active: () -> Boolean, capture: () -> ByteArray, upload: (ByteArray) -> Unit): Boolean {
+    fun transfer(active: () -> Boolean, capture: () -> ByteArray?, upload: (ByteArray) -> Unit): Boolean {
         if (!active()) return false
-        val frame=capture()
+        val frame=capture() ?: return false
         if (!active()) return false
         upload(frame)
         return true
