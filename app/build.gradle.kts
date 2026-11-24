@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+val aiAbi = providers.gradleProperty("aiAbi").orNull
+require(aiAbi == null || aiAbi in setOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")) {
+    "Set aiAbi to arm64-v8a, armeabi-v7a, x86_64, or x86."
+}
+
 android {
     namespace = "dev.aw.engineremotecontroller"
     compileSdk = 34
@@ -13,6 +18,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        if (aiAbi != null) ndk.abiFilters.add(aiAbi)
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -39,6 +45,9 @@ android {
     buildFeatures {
         compose = true
     }
+    androidResources {
+        noCompress += "onnx"
+    }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.1"
     }
@@ -50,6 +59,7 @@ android {
 }
 
 dependencies {
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.22.0")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

@@ -214,3 +214,21 @@ R2の `{DEVICE_ID}/latest.jpg` を上書きし、長期履歴や公開URLは作�
 - RTSPフォールバック未実装。RTSPフレーム抽出には再生/デコードのライフサイクル管理と実機のコーデック検証が必要です。メンテナンス終了ライブラリは導入していません。GetSnapshotUri非対応時は、カメラのファームウェア/ONVIF設定を確認するか、対応機器へ変更することを推奨します。別途、保守中のAndroidメディア機能による抽出を実機検証してから追加できます。
 
 実機では、Q5のGetSnapshotUri、HTTP/WS-Security認証、URIのホスト、ポート、カメラ時刻、画像サイズ/品質、再接続、Wi-Fi切断、Keystore再読込、通知・画面消灯中の待受、2ブラウザでの切断時停止を確認してください。カメラを故障/切断させた状態と詳細監視中に、Bluetooth操作・時間指定OFF・既存pollが遅延/切断しないことを現地で確認する必要があります。
+
+## AI監視イベント
+
+既存の `DB`、`CAMERA_BUCKET`、`DEVICE_ID`、端末キーと操作キーを使います。R2の公開アクセス（r2.devと公開カスタムドメイン）は無効にしてください。検知画像は `ai-events/<deviceId>/<eventId>.jpg` に格納し、操作セッションCookieを検証するWorker経由で配信します。保存期間は `AI_EVENT_RETENTION_DAYS`（既定30日、1〜365日）で、新規イベントの撮影時刻に適用します。15分ごとのCron Triggerが期限切れの画像とD1行を最大50件ずつ削除します。カメラの最新JPEGとは別のキーです。
+
+1. ローカルで `npm test`、`npx wrangler d1 migrations apply engine-remote --local`、`npx wrangler deploy --dry-run` を実行し、既存のリレーとカメラAPIも確認します。
+2. 本番反映を行う際は対象のアカウントとD1を確認し、バックアップを確保します。 `npx wrangler d1 migrations list engine-remote --remote` で保留中のマイグレーションを確認したあと、 `npx wrangler d1 migrations apply engine-remote --remote` で `0003_ai_events.sql` を適用し、 `npx wrangler deploy` でWorkerとCronを反映します。既存の遠隔操作用テーブルを変更するSQLは含みません。
+3. Web画面で「AI検知履歴」を取得し、端末の確定イベントと画像を確認します。画像のURLを未認証セッションで開くと401になります。
+
+| API | 認証と用途 |
+| --- | --- |
+| `POST /api/device/ai/events` | 端末Bearer。 `X-AI-Event` に `eventId,deviceId,capturedAt,target,confidence,bbox` のJSON。本文は最大128 KiBのJPEG、画像保存OFFでは空の `application/octet-stream`。同じ端末IDとイベントIDでの再送は同じ内容なら成功、内容が異なれば409 |
+| `GET /api/ai/events` | 操作セッション。新しい順に20件ずつ取得。レスポンスの `next.before` と `next.id` を次の `before` と `id` に指定 |
+| `GET /api/ai/events/<eventId>/image` | 操作セッション。保存済み・期限内のJPEGを `private, no-store` で返却 |
+
+### 外出先へのプッシュ通知案
+
+Web Pushを追加する場合は、操作セッションとOriginを検証する購読登録・解除APIを設け、明示許可を得たブラウザのService Workerの購読情報を端末IDに紐づけます。VAPID秘密鍵はWorker Secret、購読先URLと鍵は閲覧できないD1テーブルで管理します。購読可能な通知サービス宛先を制限し、解除またはPushの404/410で購読を削除します。イベントの保存完了後にイベントIDを使って通知ジョブを重複排除し、履歴保存とは別のワーカーで配信します。通知にはイベントIDなど最小限の情報を含め、画像はログイン後に履歴から取得します。現在利用できる通知は現地Androidのローカル通知です。

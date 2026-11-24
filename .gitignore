@@ -20,3 +20,6 @@ cloudflare/.dev.vars
 cloudflare/.dev.vars.*
 !cloudflare/.dev.vars.example
 cloudflare/.env*
+/.ai-work/
+/app/src/main/assets/MDV6-yolov10-c.onnx
+/app/src/androidTest/assets/mdv6-cat.jpg

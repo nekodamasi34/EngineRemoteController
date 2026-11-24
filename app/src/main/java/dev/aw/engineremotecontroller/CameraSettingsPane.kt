@@ -50,7 +50,7 @@ fun CameraSettingsPane(manager: () -> CameraManager?) {
             }
             Text(message); Text(status,style=MaterialTheme.typography.bodySmall)
             preview?.let { androidx.compose.foundation.Image(bitmap=it.asImageBitmap(),contentDescription="ローカル静止画",modifier=Modifier.fillMaxWidth()) }
-            Text("監視は遠隔待受中に利用できます。映像だけでエンジン始動の安全を判断しないでください。",style=MaterialTheme.typography.bodySmall)
+            Text("Web監視は遠隔待受中に利用できます。映像だけでエンジン始動の安全を判断しないでください。",style=MaterialTheme.typography.bodySmall)
         }
     }
 }
